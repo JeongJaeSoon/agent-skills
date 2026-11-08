@@ -255,7 +255,8 @@ def main():
                 print(f"reorient: {root}/hooks/hooks.json is unreadable; this session records no reload digest", file=sys.stderr)
             try:
                 before = roles.record_terminal(os.environ.get("ORCA_TERMINAL_HANDLE"), session, event.get("cwd"),
-                                               time.time(), loaded, same_process=source == "clear")
+                                               time.time(), loaded, same_process=source == "clear",
+                                               began=source in ("startup", "resume"))
             except OSError:
                 pass
         record = declared(session)

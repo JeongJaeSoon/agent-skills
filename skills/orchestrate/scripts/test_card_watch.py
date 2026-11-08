@@ -1,5 +1,5 @@
 """card_watch.py: which screens wake the orchestrator or lead, and which do not twice. Run: python3 test_card_watch.py"""
-import contextlib, io, json, os, pathlib, sys, tempfile
+import contextlib, datetime, io, json, os, pathlib, sys, tempfile
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import agent_signal, card_watch, prog
 
@@ -133,26 +133,55 @@ found = scan(seen)
 assert found == ["STUCK card-a (goal lost, idle 16 min): read its screen", "  orca terminal read --terminal h1 --screen"], \
     "a session never under /goal, and a goal card idle 5 min, are fine"
 assert scan(seen) == [] and seen["goals"] == ["h1", "h3"], "reported once; the card stays known"
-# A lead with no goal on purpose that waits on its inbox (a live background `orch wait`) is parked, not lost; the same
-# screen with nothing running, or claude agents idle, still is.
-waiting = ["⏺ Queue done; waiting on the inbox.", "❯ ", "  ⏵⏵ auto mode on · 1 shell still running"]
-screens = {"h1": waiting, "h2": idle, "h3": lost}
-assert not any("goal lost" in l for l in card_watch.scan(terms, {"goals": ["h1", "h3"]}, read, NOW, 30, 100.0, 15)), \
-    "a background shell on the status bar means it waits on purpose"
+# A lead that waits on purpose (parked_cards: a live inbox wait, a board to-do not yet due) is not lost. Other background
+# work (a dev server, a Monitor, claude agents busy) does not make a lost goal quiet.
 screens = {"h1": lost, "h2": idle, "h3": lost}
-assert not any("card-a (goal lost" in l for l in card_watch.scan(terms, {"goals": ["h1", "h3"]}, read, NOW, 30, 100.0, 15,
-                                                                 agents={"h1": {"agents": "busy"}})), "claude agents busy is waiting too"
-assert any("card-a (goal lost" in l for l in card_watch.scan(terms, {"goals": ["h1", "h3"]}, read, NOW, 30, 100.0, 15,
-                                                              agents={"h1": {"agents": "idle"}})), "idle with nothing running is still lost"
+lost_for = lambda **k: [l for l in card_watch.scan(terms, {"goals": ["h1", "h3"]}, read, NOW, 30, 100.0, 15, **k) if "card-a (goal lost" in l]
+assert lost_for(), "nothing waits on it: lost"
+assert not lost_for(parked={"h1": "inbox wait"}), "parked on an inbox wait"
+dev_server = ["⏺ Queue done.", "❯ ", "  ⏵⏵ auto mode on · 1 shell still running"]
+screens["h1"] = dev_server
+assert lost_for(agents={"h1": {"agents": "busy"}}), "a dev server and claude agents busy are not a wait on the inbox"
+screens["h1"] = lost
 
-# A "Goal paused" line left above a card that went on is old: /goal is active again, or claude agents says busy.
+NOW_S, wait_cmd = 1_700_000_000.0, "orch wait billing --timeout-ms 3300000"
+mon = lambda cmd, sid="s-a", status="running", cwd="/w/card-a": {"command": cmd, "claude_session": sid, "status": status, "cwd": cwd}
+lead = term("h1", "/w/card-a", last=NOW - 16 * 60000) | {"title": "lead:billing"}
+todo = lambda who, due: {"who": who, "due": due, "title": "check"}
+future = datetime.datetime.fromtimestamp(NOW_S + 86400, datetime.timezone.utc).isoformat()
+past = datetime.datetime.fromtimestamp(NOW_S - 86400, datetime.timezone.utc).isoformat()
+with tempfile.TemporaryDirectory() as tmp:
+    tmp = pathlib.Path(tmp)
+    (tmp / "terminals").mkdir()
+    old_state = os.environ.get("AGENT_SKILLS_STATE")
+    os.environ["AGENT_SKILLS_STATE"] = str(tmp)
+    try:
+        (tmp / "terminals" / "h1.json").write_text('{"session_id": "s-a", "at": 1}')
+        parked = lambda mons=(), items=(): card_watch.parked_cards([lead], list(mons), list(items), NOW_S)
+        assert parked([mon(wait_cmd)]) == {"h1": "inbox wait"}
+        assert parked([mon("orca orchestration check --run r --wait --types question --json")]) == {"h1": "inbox wait"}
+        assert parked([mon("npm run dev"), mon("while sleep 60; do gh pr checks 1; done")]) == {}, "other background work"
+        assert parked([mon(wait_cmd, status="lost"), mon(wait_cmd, status="dead")]) == {}, "a wait that is gone"
+        assert parked([mon(wait_cmd, sid="s-other")]) == {}, "another session's wait in the same worktree"
+        assert parked(items=[todo("lead:billing", future)]) == {"h1": f"due {future}"}, "a to-do for it, not due yet"
+        assert parked(items=[todo("Lead:Billing", future)]) != {}, "who is matched without case"
+        assert parked(items=[todo("lead:billing", past)]) == {}, "a to-do whose time has come: act, not parked"
+        assert parked(items=[todo("lead:other", future), {"who": "lead:billing", "title": "no date"}]) == {}, "someone else's, or undated"
+        (tmp / "terminals" / "h1.json").unlink()
+        assert parked([mon(wait_cmd)]) == {"h1": "inbox wait"}, "no session record: the worktree matches"
+    finally:
+        os.environ.pop("AGENT_SKILLS_STATE") if old_state is None else os.environ.__setitem__("AGENT_SKILLS_STATE", old_state)
+
+# A "Goal paused" line left above a card that went on is old once /goal is active again; busy alone does not clear it.
 resumed = ["Goal paused · usage limit reached · send a message after it resets", "  ⎿  Read 3 files", "❯ ", "  ◎ /goal active (1h)"]
 screens = {"h1": resumed, "h2": resumed, "h3": paused}
 quiet_terms = card_watch.agent_terminals([term(h, f"/w/card-{c}", last=NOW - 3 * 60000) for h, c in zip(("h1", "h2", "h3"), "abc")], "me")
 got = card_watch.scan(quiet_terms, {}, read, NOW, 30, 100.0, 15, agents={"h2": {"agents": "busy"}, "h3": {"agents": "idle"}})
 assert [l.split(" ")[1] for l in got if l.startswith("STUCK")] == ["card-c"], f"only the card still paused is stuck: {got}"
-assert card_watch.scan(quiet_terms[:1], {}, lambda h: ["Goal paused · usage limit reached", "  ⎿  Read 3 files", "❯ "], NOW, 30, 100.0, 15,
-                       agents={"h1": {"agents": "busy"}}) == [], "busy now: the paused line is old"
+paused_busy = ["Goal paused · usage limit reached", "  ⎿  Read 3 files", "❯ ", "  ⏵⏵ auto mode on · 1 shell still running"]
+assert card_watch.scan(quiet_terms[:1], {}, lambda h: paused_busy, NOW, 30, 100.0, 15,
+                       agents={"h1": {"agents": "busy"}})[0].startswith("STUCK card-a (auth)"), \
+    "a really paused goal is not hidden by a shell running or claude agents busy"
 assert card_watch.scan(quiet_terms[:1], {}, lambda h: ["  ⎿  Please run /login · API Error: 403 Forbidden", "❯ "], NOW, 30, 100.0, 15,
                        agents={"h1": {"agents": "busy"}})[0].startswith("STUCK card-a (auth)"), "a lost login stays auth"
 screens = {"h1": lost, "h2": idle, "h3": lost}  # the section below goes on from this state
@@ -468,7 +497,7 @@ with tempfile.TemporaryDirectory() as tmp:
         import time as _time
         h = "term_cccccccc-0000-4000-8000-000000000000"
         log = pathlib.Path(SETUP.name) / "close-setup" / "card-a.log"
-        record = lambda at: (tmp / "terminals" / f"{h}.json").write_text(json.dumps({"session_id": "s", "at": at}))
+        record = lambda at: (tmp / "terminals" / f"{h}.json").write_text(json.dumps({"session_id": "s", "at": at, "started_at": at}))
         failed_log = lambda age_s: (helper_log("close-setup", "card-a", "term_x  agent unconfirmed: idle at an empty prompt",
                                                '"T', "result: failed"),
                                     os.utime(log, (_time.time() - age_s,) * 2))
@@ -480,6 +509,16 @@ with tempfile.TemporaryDirectory() as tmp:
         assert card_watch.setup_failure("card-a", h), "a failure after the card's start is reported"
         record(_time.time() - 30)
         assert card_watch.setup_failure("card-a", h) is None, "a log written before the card's current start is stale"
+        # A compaction or /clear after the failure rewrites `at` but not `started_at`: the failure is still fresh.
+        record(_time.time() - 3600)
+        failed_log(60)
+        card_watch.roles.record_terminal(h, "s", "/w/card-a", _time.time(), began=False)
+        assert card_watch.card_started_at(h) < _time.time() - 3000, "a compaction keeps the session's start"
+        assert card_watch.setup_failure("card-a", h), "a failure followed by a compaction before the next round is still reported"
+        card_watch.roles.record_terminal(h, "s2", "/w/card-a", _time.time(), began=True)
+        assert card_watch.setup_failure("card-a", h) is None, "a resume or startup after the log is a new start"
+        (tmp / "terminals" / f"{h}.json").write_text(json.dumps({"session_id": "s", "at": _time.time()}))
+        assert card_watch.card_started_at(h) is None and card_watch.setup_failure("card-a", h), "a record from before the field: age only"
         (tmp / "terminals" / f"{h}.json").unlink()
         failed_log(3 * 3600)
         assert card_watch.setup_failure("card-a", h) is None, "no start record: an hours-old log is stale by age"

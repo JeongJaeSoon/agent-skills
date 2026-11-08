@@ -92,7 +92,10 @@ if "--terminal" in a and arg("--terminal").startswith("structured-"):  # a struc
     print(json.dumps({"ok": False, "error": {"code": "terminal_handle_stale", "message": "no terminal\nwith this handle"}}, indent=1))
     sys.exit(1)
 if a[:2] == ["terminal", "list"]:
-    out = {"terminals": [dict(t, handle=h) for h, t in st["terms"].items()]}
+    st["lists"] = st.get("lists", 0) + 1
+    # claude_after: Orca shows agentIdentity null until the Nth listing
+    out = {"terminals": [dict(t, handle=h, **({"agentIdentity": None} if st["lists"] < t.get("claude_after", 0) else {}))
+                         for h, t in st["terms"].items()]}
 elif a[:2] == ["terminal", "show"]:
     out = {"terminal": dict(st["terms"][arg("--terminal")], handle=arg("--terminal"))}
 elif a[:2] == ["worktree", "ps"]:
@@ -816,8 +819,14 @@ def test_close_setup_agent():
         sid = "structured-agent-session-claude_x"
         st.write_text(json.dumps({"terms": {"took": terms["took"], "plain": {"agentIdentity": None, "title": "zsh", "screens": [IDLE]}},
                                   "sent": []}))
-        structured = sync.watch_start(sync.agent_terminal(sid, "/w/card"), 0.2)[0]
+        structured = sync.watch_start(sid, 0.2, "/w/card")[0]
         raw = sync.watch_start(sid, 0.2)
+        # Orca lists the terminal with agentIdentity null for the first polls: the lookup is asked again, not given up on.
+        late = dict(terms["took"], claude_after=3, agentIdentity="claude")
+        st.write_text(json.dumps({"terms": {"took": late}, "sent": []}))
+        started_late = sync.watch_start(sid, 3, "/w/card")[0]
+        st.write_text(json.dumps({"terms": {"plain": {"agentIdentity": None, "title": "zsh", "screens": [IDLE]}}, "sent": []}))
+        no_terminal = sync.watch_start(sid, 0.2, "/w/card")
         st.write_text(json.dumps({"terms": terms, "sent": []}))
         ambiguous = sync.agent_terminal(sid, "/w/card")
     finally:
@@ -832,7 +841,11 @@ def test_close_setup_agent():
     check("a structured session is confirmed through the worktree's Claude terminal", structured == "started", structured)
     check("without that lookup it reads as unconfirmed, with its refusal on one line",
           raw[0] == "unconfirmed" and "terminal_handle_stale: no terminal with this handle" in raw[1] and "\n" not in raw[1], raw)
-    check("several Claude terminals in the worktree leave the handle as given", ambiguous == sid, ambiguous)
+    check("a terminal Orca names an agent only on a later poll still confirms the start", started_late == "started", started_late)
+    check("a structured session with no terminal says so instead of reading its handle",
+          no_terminal[0] == "unconfirmed" and "no Claude terminal in its worktree" in no_terminal[1], no_terminal)
+    check("several Claude terminals in the worktree are not guessed between",
+          ambiguous[0] is None and "Claude terminals in the worktree" in ambiguous[1], ambiguous)
     check("orca's refusal is one line, whatever its shape",
           sync.error_text('{"ok": false, "error": {"code": "c", "message": "a\\nb"}}', "") == "c: a b"
           and sync.error_text("", "line one\nline two") == "line one line two"
@@ -1236,8 +1249,15 @@ def test_session_for():
         try:
             roles.record_terminal("term_a", "s-1", "/w", 2000.0)
             saved = json.loads(roles.terminal_file("term_a").read_text())
-            check("the record holds the handle, session, cwd and time, nothing else",
-                  saved == {"handle": "term_a", "session_id": "s-1", "cwd": "/w", "at": 2000.0}, saved)
+            check("the record holds the handle, session, cwd, time and start time, nothing else",
+                  saved == {"handle": "term_a", "session_id": "s-1", "cwd": "/w", "at": 2000.0, "started_at": 2000.0}, saved)
+            roles.record_terminal("term_a", "s-1", "/w", 2500.0, began=False)
+            check("a compaction moves `at` and keeps the start time",
+                  json.loads(roles.terminal_file("term_a").read_text())["at"] == 2500.0
+                  and json.loads(roles.terminal_file("term_a").read_text())["started_at"] == 2000.0)
+            roles.record_terminal("term_a", "s-1", "/w", 3000.0)
+            check("a startup or resume moves both", json.loads(roles.terminal_file("term_a").read_text())["started_at"] == 3000.0)
+            roles.record_terminal("term_a", "s-1", "/w", 2000.0)
             check("a live session is found by its recorded id",
                   roles.session_for("term_a", wake_rows())[0]["sessionId"] == "s-1")
             check("a background session is not this terminal's",

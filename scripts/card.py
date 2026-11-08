@@ -699,6 +699,18 @@ def goal_after_idle(handle, line, timeout_s=GOAL_IDLE_S, worktree=None):
     manual = manual_goal_command(handle, line)
     deadline = time.monotonic() + timeout_s
     while True:
+        if handle.startswith("structured-") and worktree:
+            # Not a terminal: the worktree's Claude terminal stands for it once Orca lists one, which can be after the start.
+            named, why = sync.agent_terminal(handle, worktree)
+            if not named:
+                if time.monotonic() >= deadline:
+                    print(f"[{ME}] warning: the /goal line was not typed into {handle} ({why}; waited up to {timeout_s}s). "
+                          f"Find the card's terminal with `orca terminal list --worktree path:{worktree}` and type it there.",
+                          file=sys.stderr)
+                    return 1
+                time.sleep(GOAL_POLL_S)
+                continue
+            handle, manual = named, manual_goal_command(named, line)
         if time.monotonic() >= deadline:
             print(f"[{ME}] warning: the /goal line was not typed into {handle} (waited up to {timeout_s}s). "
                   f"Once the session is idle, run: {manual}", file=sys.stderr)
