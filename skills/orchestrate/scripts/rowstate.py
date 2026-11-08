@@ -135,7 +135,9 @@ def program_facts(open_gates=None, home=None, unread=None):
                 per.setdefault(e["pr"], []).append(e)
         for n, evs in per.items():
             v = next((e for e in reversed(evs) if e.get("ev") == "verdict"), None)
-            verdict = v and {"sha": v.get("sha") or "", "pass": str(v.get("result") or "pass").lower() in ("pass", "ok")}
+            import landjudge
+            verdict = v and {"sha": v.get("sha") or "", "pass": str(v.get("result") or "pass").lower() in ("pass", "ok")
+                             and (landjudge.act_on_count(v.get("act_on")) or 0) < 1}  # Act-on >= 1 is a fail (L-465)
             out.setdefault(f"{cfg['repo']}#{n}", []).append(
                 {"program": d.name, "policy": policy, "verdict": verdict,
                  "gate": gate_of(evs, open_gates)})

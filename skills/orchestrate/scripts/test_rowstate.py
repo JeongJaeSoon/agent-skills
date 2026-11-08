@@ -220,6 +220,16 @@ progs.mkdir(parents=True)
 (progs / "ledger.jsonl").write_text("{not json\n")
 seen = set()
 assert rowstate.program_facts(home=progs.parent, unread=seen) == {} and seen == {"octo/app"}
+# L-465: a pass row carrying an Act-on finding is a fail in the brief too, so its next cell never says "머지".
+act = tmp / "programs-acton" / "p"
+act.mkdir(parents=True)
+(act / "program.json").write_text(json.dumps({"repo": "octo/app", "merge_policy": "autonomous"}))
+(act / "ledger.jsonl").write_text("\n".join(json.dumps(r) for r in (
+    {"ev": "verdict", "pr": 1, "sha": "aaa", "result": "pass", "act_on": 1},
+    {"ev": "verdict", "pr": 2, "sha": "bbb", "result": "pass", "act_on": 0},
+    {"ev": "verdict", "pr": 3, "sha": "ccc", "result": "pass"})) + "\n")
+got = rowstate.program_facts(home=act.parent)
+assert [got[f"octo/app#{n}"][0]["verdict"]["pass"] for n in (1, 2, 3)] == [False, True, True], got
 # A program read that is not the only one on the repository does not decide who merges: one unread may hold its gate.
 auto = {"octo/app#1": [{"program": "q", "policy": "autonomous", "verdict": None, "gate": "none"}]}
 assert rowstate.judge(row, facts({"octo/app#1": READY}, programs=auto) | {"programs_unread": {"octo/app"}})["next"].endswith("프로그램 파일 못 읽음")

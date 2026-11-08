@@ -954,6 +954,28 @@ class LandExec(Fixture):
         got = self.settled(row, "refused", 3, "verdict changed")
         self.assertEqual(got["audit"]["verdict"]["source"], "review:claude")
 
+    def test_a_same_family_verdict_recorded_during_the_checks_does_not_merge(self):
+        """L-465: the other-family rule is read again on the verdict standing right before the merge."""
+        ident = {"author": ["term_author"], "evidence": "https://example.test/review/1", "recorder": "term_orchestrator"}
+        self.p.append("verdict", pr=self.n, sha="oldsha", patch_id="old-tree", source="review:codex", result="fail",
+                      reviewer="codex", act_on=1, **ident)
+        self.verdict(reviewer="claude-reviewer")  # the tree changed since: another family passed it
+        row = self.request()
+        real = prog.pr_view
+
+        def view(repo, n):
+            if sys._getframe(1).f_code.co_name == "merge_unit":  # every check passed; the first family passes it again
+                self.p.append("verdict", pr=self.n, sha=f"h{self.n}", patch_id=pid(self.n), source="review:codex",
+                              result="pass", reviewer="codex", **ident)
+            return real(repo, n)
+        prog.pr_view = view
+        try:
+            self.round()
+        finally:
+            prog.pr_view = real
+        self.settled(row, "refused", 3, "verdict changed")
+        self.assertEqual(self.merges(), [])
+
     def test_a_merge_found_after_the_expiry_is_recorded_not_expired(self):
         config(max_wait_hours=1e-9)  # every request is past it (0 would read as unset, the 24 h default)
         row = self.request()

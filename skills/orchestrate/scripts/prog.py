@@ -2803,7 +2803,7 @@ def merge_unit(p, pr, unit, klass, events, onto=None, stacked=False, expect=None
             return 3, f"act: #{pr}'s land was stopped during the checks: record a verdict at the head or land again"
         latest = pr_state(now_events).get(pr, {}).get("verdict") or {}
         p.land_verdict = latest
-        if latest.get("sha") != expect or latest.get("result") != "pass" or \
+        if latest.get("sha") != expect or latest.get("result") != "pass" or family_problem(now_events, pr) or \
                 (verdict_sources is not None and (latest.get("source") not in verdict_sources
                                                   or verdict_identity_problem(latest))):
             return 3, (f"act: #{pr}'s verdict changed during the checks ({latest.get('result')} from"
