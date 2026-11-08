@@ -103,7 +103,7 @@ elif a[:2] == ["worktree", "ps"]:
 elif a[:2] == ["terminal", "read"]:
     t = st["terms"][arg("--terminal")]
     tail = t["screens"].pop(0) if len(t["screens"]) > 1 else t["screens"][0]
-    out = {"terminal": {"tail": tail, "source": "screen"}}
+    out = {"terminal": {"tail": tail, "source": "screen", **({"draft": t["draft"]} if t.get("draft") else {})}}
 elif a[:2] == ["terminal", "close"]:
     st.setdefault("closed", []).append(arg("--terminal"))
     out = {}
@@ -325,6 +325,89 @@ def test_classify():
     check("a composer draft is not sendable and the reason shows it",
           "'hi'" in (sync.classify(IDLE, idle, draft="hi") or ""))
     check("the real screen after a reload is sendable", sync.classify(RELOAD_DONE, idle) is None)
+    # Orca puts a bare ❯ in the tail whenever it reports a draft, typed or a Claude Code autocomplete suggestion.
+    bare = sync.classify(IDLE, idle, draft="summarize the diff") or ""
+    check("a draft under a bare prompt is not sendable and is not called typed text",
+          "summarize the diff" in bare and "autocomplete suggestion" in bare, bare)
+    visible = sync.classify(TYPING, idle, draft="아 그리고") or ""
+    check("a draft with a typed prompt on screen keeps the plain draft reason",
+          "holds a draft (not on screen)" in visible and "suggestion" not in visible, visible)
+    check("an empty-draft check still sends", sync.classify(IDLE, idle, draft="") is None)
+
+
+def test_suggestion_confirm():
+    """A bare-prompt draft may be Claude Code's autocomplete suggestion, which no field tells from typed text. Only the
+    owner's exact-text confirmation sends past it, once."""
+    import importlib
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    fake = tmp / "orca"
+    fake.write_text(FAKE_ORCA); fake.chmod(0o755)
+    st = tmp / "orca.json"
+    claude = {"agentIdentity": "claude", "connected": True, "writable": True, "title": "✳ a"}
+    st.write_text(json.dumps({"sent": [], "terms": {
+        "ghost": dict(claude, screens=[IDLE], draft="summarize the diff"),
+        "other": dict(claude, screens=[IDLE], draft="summarize the diff"),
+        "typed": dict(claude, screens=[TYPING], draft="아 그리고 지금 이 세션이"),
+    }}))
+    state = tmp / "state"; state.mkdir()
+    head = subprocess.run(["git", "-C", str(HERE.parent), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    env = dict(AGENT_SKILLS_STATE=str(state), SKILLS_SYNC_ORCA=str(fake), FAKE_ORCA_STATE=str(st),
+               SKILLS_SYNC_SETTLE_S="0", SKILLS_SYNC_CONFIRM_S="0",
+               AGENT_SKILLS_INSTALLED_PLUGINS=str(tmp / "no-installed-plugins.json"))
+    old = {k: os.environ.get(k) for k in env}
+    os.environ.update(env)
+    importlib.reload(sync)
+    kept = state / "suggestion-confirmed.json"
+
+    def confirmed():
+        return json.loads(kept.read_text()) if kept.exists() else None
+
+    def run(*args):
+        (state / "reload-pending.json").write_text(json.dumps({"kind": "skills", "since": "2026-09-25T23:39:02+0900",
+                                                                "done": [], "head": head}))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = sync.main(["broadcast", "--skills", *args])
+        return code, out.getvalue(), json.loads(st.read_text())["sent"]
+
+    try:
+        code, out, sent = run("--terminal", "ghost")
+        check("an unconfirmed bare-prompt draft holds and prints the line to confirm it",
+              code == 1 and sent == [] and "--confirm-suggestion" in out and "ghost=summarize the diff" in out, out)
+        code, out, sent = run("--terminal", "ghost", "--confirm-suggestion", "ghost=summarize the diff")
+        check("a confirmed draft with the same text is sent the reload", code == 0 and sent == [["ghost", "/reload-skills"]],
+              (code, out, sent))
+        check("the confirmation is consumed by the successful send", confirmed() == {}, confirmed())
+        cur = json.loads(st.read_text())
+        st.write_text(json.dumps(dict(cur, sent=[])))
+        code, out, sent = run("--terminal", "other", "--confirm-suggestion", "other=summarize the dif")
+        check("a confirmation for different text holds", code == 1 and sent == [], (code, out, sent))
+        code, out, sent = run("--terminal", "other", "--confirm-suggestion", "ghost=summarize the diff")
+        check("a confirmation for another session does not apply", code == 1 and sent == [], (code, out, sent))
+        code, out, sent = run("--terminal", "typed", "--confirm-suggestion", "typed=아 그리고 지금 이 세션이")
+        check("a draft shown on screen is typed text and no confirmation sends past it", code == 1 and sent == [],
+              (code, out, sent))
+        kept.unlink()
+        with sync.locked() as got:
+            code, out, sent = run("--terminal", "ghost", "--confirm-suggestion", "ghost=summarize the diff")
+        check("a confirmation is recorded only under the broadcast lock", got and code == 1 and sent == []
+              and confirmed() is None, (code, out, confirmed()))
+        sync.confirm_suggestions([("ghost", "summarize the diff")])
+        reason = sync.send_to("ghost", "/reload-skills", lambda *a: False)
+        check("a send whose result cannot be confirmed still uses up the confirmation",
+              reason == sync.UNCONFIRMED and confirmed() == {}, (reason, confirmed()))
+        st.write_text(json.dumps(dict(json.loads(st.read_text()), sent=[])))
+        kept.unlink()
+        code, out, sent = run("--terminal", "ghost", "--dry-run", "--confirm-suggestion", "ghost=summarize the diff")
+        check("--dry-run records no confirmation", sent == [] and confirmed() is None, confirmed())
+        for bad in (["--confirm-suggestion"], ["--confirm-suggestion", "no-equals"], ["--confirm-suggestion", "ghost="]):
+            code, out, sent = run("--terminal", "ghost", *bad)
+            check(f"a malformed {bad[1:] or 'flag'} is refused and sends nothing", code == 2 and sent == [], (code, out, sent))
+    finally:
+        for k, v in old.items():
+            os.environ.pop(k) if v is None else os.environ.__setitem__(k, v)
+        importlib.reload(sync)
+        shutil.rmtree(tmp)
 
 
 def test_confirm():
@@ -1284,6 +1367,7 @@ if __name__ == "__main__":
     test_drift_step()
     test_reload_kind()
     test_classify()
+    test_suggestion_confirm()
     test_confirm()
     test_sync()
     test_broadcast()

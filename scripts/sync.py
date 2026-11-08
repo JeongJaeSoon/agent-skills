@@ -3,12 +3,16 @@
 
 Usage:
   skills-sync sync [--no-broadcast]      fetch, fast-forward or push, then broadcast a needed reload
-  skills-sync broadcast [--skills|--plugins] [--dry-run] [--terminal <handle>]
+  skills-sync broadcast [--skills|--plugins] [--dry-run] [--terminal <handle>] [--confirm-suggestion <handle>=<draft>]...
                                          send the pending (or the given) reload to idle Claude sessions,
                                          or to one of them; first /restart (or /reload-plugins) each idle one
                                          whose screen shows it runs on what changed under it, once.
                                          A session opened after the later of the agent-skills change and the
-                                         last plugin update is skipped, except one named with --terminal
+                                         last plugin update is skipped, except one named with --terminal.
+                                         A draft under a bare ❯ may be Claude Code's autocomplete suggestion; no field
+                                         tells it from typed text, so the session stays held. The owner, after
+                                         checking, confirms the exact draft with --confirm-suggestion (the held
+                                         reason prints the line); it applies to that text only, for one send
   skills-sync nudge <terminal> <one line>
                                          type one line into a session, only if it is idle at an empty prompt
   skills-sync wake-target <terminal>     say how to wake a Claude card: the session and one-line signal for the SendMessage
@@ -39,7 +43,7 @@ The checkout is loaded live through CLAUDE_CODE_PLUGIN_DIRS (docs/platform.md), 
 every session reads. It never rebases, merges, forces or commits: anything but a fast-forward or a push of
 signed commits stops it, and the reason goes to the state file and a desktop notification.
 """
-import contextlib, datetime, fcntl, glob, json, os, pathlib, platform, re, secrets, shutil, subprocess, sys, time
+import contextlib, datetime, fcntl, glob, json, os, pathlib, platform, re, secrets, shlex, shutil, subprocess, sys, time
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 STATE = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE", "~/.local/state/agent-skills")).expanduser()
@@ -316,6 +320,22 @@ def prompt_box(lines):
     return (rules[-2], rules[-1]) if len(rules) >= 2 else None
 
 
+SUGGESTION_REASON = "Orca composer holds a draft or autocomplete suggestion (prompt shows a bare ❯)"
+CONFIRMED = STATE / "suggestion-confirmed.json"  # {handle: exact draft text the owner confirmed is only a suggestion}
+
+
+def bare_prompt(lines):
+    """True when the last prompt row on the screen is a lone ❯."""
+    rows = [l.strip() for l in norm(lines) if l.strip().startswith("❯")]
+    return bool(rows) and rows[-1] == "❯"
+
+
+def confirm_suggestions(pairs):
+    """Record the owner's confirmation that a held session's draft is only an autocomplete suggestion."""
+    CONFIRMED.parent.mkdir(parents=True, exist_ok=True)
+    write_json(CONFIRMED, {**read_json(CONFIRMED, {}), **dict(pairs)})
+
+
 def classify(lines, title, draft=""):
     """Return None when the screen is a Claude session idle at an empty prompt, else the reason it is not.
     Anything not positively recognized is a reason: a stray Enter answers whatever dialog is open."""
@@ -327,6 +347,10 @@ def classify(lines, title, draft=""):
         return "title shows the agent is busy"
     if draft:
         # Orca's own composer, not the terminal: the screen's prompt box can be empty while it holds text.
+        if bare_prompt(lines):
+            # Orca fills `draft` with Claude Code's dim autocomplete suggestion when nothing was typed, and puts a
+            # bare ❯ in the tail for any draft, so neither field tells the two apart.
+            return f"{SUGGESTION_REASON}: {draft[:40]!r}"
         return f"Orca composer holds a draft (not on screen): {draft[:40]!r}"
     if any("\x1b[200~" in l or "^[[200~" in l for l in lines):
         return "shell, not Claude"
@@ -477,7 +501,14 @@ def screen(handle):
     if t.get("source") not in (None, "screen"):
         return [], f"no rendered screen ({t.get('source')})"
     tail = t.get("tail") or []
-    return tail, classify(tail, meta.get("title") or "", t.get("draft") or "")
+    draft = t.get("draft") or ""
+    # Never inferred: only the owner's exact-text confirmation for this handle, over a bare prompt, sets a draft aside.
+    if draft and bare_prompt(tail) and read_json(CONFIRMED, {}).get(handle) == draft:
+        draft = ""
+    reason = classify(tail, meta.get("title") or "", draft)
+    if reason and reason.startswith(SUGGESTION_REASON):
+        reason += f"; if it is only a suggestion: skills-sync broadcast --confirm-suggestion {shlex.quote(f'{handle}={draft}')}"
+    return tail, reason
 
 
 def send_to(handle, text, confirmed, still=None):
@@ -495,6 +526,9 @@ def send_to(handle, text, confirmed, still=None):
     reason = still and still(second)
     if reason:
         return reason
+    left = read_json(CONFIRMED, {})
+    if left.pop(handle, None) is not None:  # one typing per confirmation, even if the screen read after it fails
+        write_json(CONFIRMED, left)
     orca("terminal", "send", "--terminal", handle, "--text", text, "--enter")
     time.sleep(CONFIRM_S)
     try:
@@ -918,13 +952,15 @@ def close_setup_terminals(handles, start, timeout_s, grace_s):
     return rc
 
 
-def broadcast(kind, dry_run, only=None):
+def broadcast(kind, dry_run, only=None, confirms=()):
     if dry_run:
         return broadcast_locked(kind, dry_run=True, only=only)
     with locked() as got:
         if not got:
             print("another sync or broadcast is running; the reload stays pending")
             return 1
+        if confirms:  # under the lock, as the send that consumes it
+            confirm_suggestions(confirms)
         return broadcast_locked(kind, only=only)
 
 
@@ -1151,13 +1187,22 @@ def main(argv):
             i = args.index("--terminal")
             only = args[i + 1] if i + 1 < len(args) else ""
             del args[i:i + 2]
+        confirms = []
+        while "--confirm-suggestion" in args:
+            i = args.index("--confirm-suggestion")
+            handle, sep, text = (args[i + 1] if i + 1 < len(args) else "").partition("=")
+            if not (sep and handle and text) or handle.startswith("-"):
+                print(__doc__)
+                return 2
+            confirms.append((handle, text))
+            del args[i:i + 2]
         # A mistyped --dry-run, or --terminal without its handle, must not broadcast for real.
         if only == "" or (only or "").startswith("-") or any(a not in ("--plugins", "--skills", "--dry-run", "--retry") for a in args):
             print(__doc__)
             return 2
         STATE.mkdir(parents=True, exist_ok=True)
         kind = "plugins" if "--plugins" in args else "skills" if "--skills" in args else None
-        return broadcast(kind, dry_run="--dry-run" in argv, only=only)
+        return broadcast(kind, dry_run="--dry-run" in argv, only=only, **({"confirms": confirms} if confirms else {}))
     if cmd == "nudge" and len(argv) == 3:
         return nudge(argv[1], argv[2])
     if cmd == "wake-target" and len(argv) == 2:
