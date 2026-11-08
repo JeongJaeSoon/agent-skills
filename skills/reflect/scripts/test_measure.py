@@ -30,7 +30,7 @@ with tempfile.TemporaryDirectory() as tmp:
         card.mkdir(parents=True)
         (card / "s.jsonl").write_text(json.dumps({**row, "requestId": "r2", "message": {"id": "m2", "usage": {"output_tokens": 5}}}) + "\n")
         assert measure.usage(["app"], a, b)["claude_output"] == 7
-        assert measure.usage(["app", "abc-12"], a, b)["claude_output"] == 12
+        assert measure.usage("app", a, b, tickets=["abc-12"])["claude_output"] == 12
         assert measure.usage(["app", "app"], a, b)["claude_output"] == 7  # one directory is counted once
         programs = root / "programs"
         (programs / "demo").mkdir(parents=True)
@@ -63,8 +63,13 @@ with tempfile.TemporaryDirectory() as tmp:
         other = root / "projects" / "-example-worktrees-abc-123-fix"
         other.mkdir(parents=True)
         (other / "s.jsonl").write_text(json.dumps({**row, "requestId": "r3", "message": {"id": "m3", "usage": {"output_tokens": 99}}}) + "\n")
-        assert measure.usage(["app", "abc-12"], a, b)["claude_output"] == 12
-        assert measure.usage(["abc-123"], a, b)["claude_output"] == 99
+        assert measure.usage("app", a, b, tickets=["abc-12"])["claude_output"] == 12
+        assert measure.usage("app", a, b, tickets=["abc-123"])["claude_output"] == 106
+        # A free-text --usage-match ending in a digit stays a plain substring (the documented behaviour).
+        digits = root / "projects" / "-example-kit2026"
+        digits.mkdir(parents=True)
+        (digits / "s.jsonl").write_text(json.dumps({**row, "requestId": "r4", "message": {"id": "m4", "usage": {"output_tokens": 3}}}) + "\n")
+        assert measure.usage("kit2", a, b)["claude_output"] == 3
         measure.gh = lambda *args: []
         assert not measure.usage("app", b, measure.ts("2026-01-03T00:00:00Z"))
         issues = root / "issues.json"

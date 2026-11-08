@@ -138,13 +138,14 @@ def program_info(slug, since, until):
     return {"tickets": tickets, "flakes": flakes}
 
 
-def usage(match, since, until):
+def usage(match, since, until, tickets=()):
+    """match: substring (or list) of project directory names. tickets: lowercase ticket ids from a ledger; those must
+    not run into a longer number, so abc-12 does not take the directory of abc-123."""
     home = os.path.expanduser(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude"))
     c, seen = collections.Counter(), set()
     dirs = []
-    for m in [match] if isinstance(match, str) else match:
-        # A fragment ending in a digit is a ticket number: abc-12 must not take the directory of abc-123.
-        edge = re.compile(re.escape(m) + r"(?!\d)") if m[-1:].isdigit() else None
+    for m, edge in [(x, None) for x in ([match] if isinstance(match, str) else match)] + \
+                   [(t, re.compile(re.escape(t) + r"(?!\d)")) for t in tickets]:
         dirs += [d for d in glob.glob(f"{home}/projects/*{m}*")
                  if d not in dirs and (not edge or edge.search(os.path.basename(d)))]
     for proj in dirs:
@@ -252,8 +253,9 @@ def main():
 
     match = opt("--usage-match", repo.split("/")[-1])
     # With --program the cards' tickets join the match, so a worktree named after the ticket is not missed.
-    matches = [match] + (prog["tickets"] if prog else [])
-    u = usage(matches, since, until)
+    tickets = prog["tickets"] if prog else []
+    matches = [match] + tickets
+    u = usage(match, since, until, tickets=tickets)
     n = max(len(prs), 1)
     w("\n## 비용 (토큰, 금액 아님)\n")
     usage_root = pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser() / "projects"
