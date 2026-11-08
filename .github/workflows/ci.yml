@@ -55,7 +55,8 @@ jobs:
         with:
           fetch-depth: 0 # hooks/test_retired.py reads the history of hooks.json
           persist-credentials: false
-      - run: python3 scripts/ci_tests.py
+      # --jobs 4: the hosted runner has 4 vCPUs; the files are independent processes, so they overlap.
+      - run: python3 scripts/ci_tests.py --jobs 4
         env:
           TMPDIR: /dev/shm # ext4 reuses a freed inode at once, and tests that replace a file expect a new one
 

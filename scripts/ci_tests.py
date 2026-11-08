@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Run every test file CI can run, each with its own empty HOME and an allow-listed environment.
 
-Usage: python3 scripts/ci_tests.py
+Usage: python3 scripts/ci_tests.py [--jobs N]
 
 Discovery, not a list: a new test_*.py runs here without touching CI. A file that cannot run on a hosted Linux runner
 goes into EXCLUDED with its reason. CONTRIBUTING.md's loop stays the full suite, and it still runs these on a Mac.
 """
-import os, pathlib, subprocess, sys, tempfile, time
+import argparse, os, pathlib, subprocess, sys, tempfile, time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 TIMEOUT_S = 300
@@ -66,7 +67,17 @@ def run_one(repo, path, timeout):
     return p.returncode == 0, "\n".join(p.stdout.splitlines()[-TAIL_LINES:])
 
 
-def run(repo, excluded, timeout=TIMEOUT_S):
+def timed(repo, path, timeout):
+    began = time.monotonic()
+    ok, tail = run_one(repo, path, timeout)
+    return path, ok, tail, time.monotonic() - began
+
+
+def run(repo, excluded, timeout=TIMEOUT_S, jobs=1):
+    """Each file is its own process with its own HOME, so files can overlap; `jobs` is how many run at once.
+    A file's result prints whole when it finishes, so output from two files never interleaves."""
+    if jobs < 1:
+        raise Refused(f"jobs must be at least 1, got {jobs}")
     if git(repo, "rev-parse", "--is-shallow-repository").strip() == "true":
         raise Refused("a shallow clone: hooks/test_retired.py would pass with less to check; use fetch-depth 0")
     for path, why in sorted(excluded.items()):
@@ -74,21 +85,23 @@ def run(repo, excluded, timeout=TIMEOUT_S):
     failed = []
     start = time.monotonic()
     tests = discover(repo, excluded)
-    for path in tests:
-        began = time.monotonic()
-        ok, tail = run_one(repo, path, timeout)
-        print(f"{'ok  ' if ok else 'FAIL'}  {time.monotonic() - began:6.1f}s  {path}", flush=True)
-        if not ok:
-            failed.append(path)
-            print(tail, flush=True)
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
+        for fut in as_completed([pool.submit(timed, repo, path, timeout) for path in tests]):
+            path, ok, tail, took = fut.result()
+            print(f"{'ok  ' if ok else 'FAIL'}  {took:6.1f}s  {path}", flush=True)
+            if not ok:
+                failed.append(path)
+                print(tail, flush=True)
     print(f"{len(tests) - len(failed)}/{len(tests)} passed in {time.monotonic() - start:.0f}s")
-    for path in failed:
+    for path in sorted(failed):
         print(f"FAILED: {path}")
     return 1 if failed else 0
 
 
 if __name__ == "__main__":
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--jobs", type=int, default=1, help="test files to run at once (default 1)")
     try:
-        sys.exit(run(REPO, EXCLUDED))
+        sys.exit(run(REPO, EXCLUDED, jobs=ap.parse_args().jobs))
     except Refused as e:
         sys.exit(f"refused: {e}")

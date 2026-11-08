@@ -103,6 +103,49 @@ class CiTests(Repo):
         code, out = self.run_all()
         self.assertEqual(code, 0, out)
 
+    def run_jobs(self, jobs, timeout=20):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = ci_tests.run(self.repo, {}, timeout, jobs)
+        return code, out.getvalue()
+
+    def test_parallel_runs_overlap_and_run_every_file_once(self):
+        # Each file waits until the other two have started: with fewer than 3 workers they would deadlock to the timeout.
+        marks = self.repo / "marks"
+        marks.mkdir()
+        body = ("import pathlib, sys, time\n"
+                "d = pathlib.Path({marks!r})\n"
+                "(d / {name!r}).write_text('x')\n"
+                "end = time.time() + 15\n"
+                "while len(list(d.iterdir())) < 3:\n"
+                "    if time.time() > end: sys.exit(1)\n"
+                "    time.sleep(0.05)\n")
+        for n in "abc":
+            self.add(f"test_{n}.py", body.format(marks=str(marks), name=n))
+        code, out = self.run_jobs(3, timeout=30)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(sorted(marks.iterdir()), [marks / n for n in "abc"])
+        self.assertIn("3/3 passed", out)
+        self.assertEqual(out.count("ok  "), 3)
+
+    def test_parallel_failure_is_named_and_counted(self):
+        self.add("test_ok.py", "\n")
+        self.add("sub/test_bad.py", "print('why it broke'); raise SystemExit(3)\n")
+        code, out = self.run_jobs(4)
+        self.assertEqual(code, 1)
+        self.assertIn("FAILED: sub/test_bad.py", out)
+        self.assertIn("why it broke", out)
+        self.assertIn("1/2 passed", out)
+
+    def test_jobs_below_one_is_refused(self):
+        self.add("test_ok.py", "\n")
+        with self.assertRaisesRegex(ci_tests.Refused, "jobs"):
+            self.run_jobs(0)
+
+    def test_the_workflow_runs_tests_in_parallel(self):
+        text = WORKFLOW.read_text()
+        self.assertRegex(text, r"python3 scripts/ci_tests\.py --jobs [2-9]\b")
+
     def test_every_excluded_path_exists_in_this_repository(self):
         tracked = subprocess.run(["git", "-C", str(HERE.parent), "ls-files"], capture_output=True, text=True).stdout
         self.assertLessEqual(set(ci_tests.EXCLUDED), set(tracked.splitlines()))
