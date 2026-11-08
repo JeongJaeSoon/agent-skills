@@ -1371,6 +1371,95 @@ except SystemExit as e:
 
 print("prog.py stacks: all pass")
 
+# --- an external green clears this program's red (#595) ------------------------------------------
+# Another program lands the repair, so the commit that proves main green is not in this ledger.
+R1, S40, OLD40 = "a" * 40, "b" * 40, "c" * 40
+ext = row("main_green", sha=S40, via="descendant", clears=[R1])
+base_events = [row("landed", pr=1, sha="g"), row("main_green", pr=1, sha="g"), row("landed", pr=2, sha=R1), row("main_red", pr=2, sha=R1)]
+assert prog.main_state(base_events) == "red"
+assert prog.main_state(base_events + [ext]) == "green", "a descendant green clears the red it names"
+assert prog.cap_from(base_events + [ext], 6) == prog.cap_from(base_events, 6) == 1, "an external green is no landing: cap unchanged"
+assert prog.cap_from(base_events + [ext, row("landed", pr=9, sha=S40)], 6) == 1, "landing that sha later gives no retroactive +1"
+assert len(prog.landed_shas(base_events + [ext])) == 2, "landing count unchanged"
+assert prog.main_state(base_events + [ext, row("landed", pr=3, sha="n")]) == "pending"
+assert prog.main_state(base_events + [ext, row("landed", pr=3, sha="n"), row("main_red", pr=3, sha="n")]) == "red", \
+    "a red recorded after the external green is not cleared by it"
+assert prog.main_state([row("landed", pr=2, sha=R1), row("main_red", pr=2), ext]) == "green", "legacy red without sha"
+
+d4 = prog.HOME / "ext"
+d4.mkdir()
+(d4 / "program.json").write_text(json.dumps(dict(cfg, slug="ext")))
+pe = prog.Program("ext")
+with contextlib.redirect_stdout(io.StringIO()):
+    for e in base_events:
+        pe.append(e["ev"], **{k: v for k, v in e.items() if k not in ("ts", "ev")})
+real_compare, calls = prog.compare, []
+
+
+def fake_compare(table):
+    def f(repo, base, head):
+        calls.append((base, head))
+        if (base, head) not in table:
+            sys.exit("gh api … failed (1): HTTP 404")
+        return {"status": table[(base, head)]}
+    return f
+
+
+def refused(sha, why):
+    n = len(pe.events())
+    try:
+        prog.cmd_record(["ext", "main_green", "--sha", sha])
+    except SystemExit as e:
+        assert why in str(e), (why, str(e))
+    else:
+        raise AssertionError(f"main_green --sha {sha[:8]} accepted; expected {why!r}")
+    assert len(pe.events()) == n, "a refused record writes nothing"
+
+
+good = {(R1, S40): "ahead", (S40, "main"): "ahead"}
+prog.compare = fake_compare({**good, (R1, OLD40): "behind", (OLD40, "main"): "ahead"})
+refused(OLD40, "not a descendant")
+prog.compare = fake_compare({**good, (S40, "main"): "diverged"})
+refused(S40, "not on main")
+prog.compare = fake_compare({(R1, S40): "ahead"})
+refused(S40, "could not be checked")
+prog.compare = fake_compare(good)
+refused("main", "full 40-char")
+refused(S40[:12], "full 40-char")
+# A race: another landing goes red between the checks and the append; the row must not clear a red it never checked.
+def racing(repo, base, head):
+    if not any(e.get("sha") == "late" for e in pe.events()):
+        pe.append("landed", pr=5, sha="late"); pe.append("main_red", pr=5, sha="late")
+    return {"status": "ahead"}
+prog.compare = racing
+try:
+    prog.cmd_record(["ext", "main_green", "--sha", S40])
+    raise AssertionError("an external green was appended over a red it never checked")
+except SystemExit as e:
+    assert "changed while" in str(e), e
+assert not any(e.get("via") for e in pe.events())
+# start over with a clean ledger
+(d4 / "ledger.jsonl").unlink()
+with contextlib.redirect_stdout(io.StringIO()):
+    for e in base_events:
+        pe.append(e["ev"], **{k: v for k, v in e.items() if k not in ("ts", "ev")})
+prog.compare = fake_compare(good)
+with contextlib.redirect_stdout(io.StringIO()):
+    prog.cmd_record(["ext", "main_green", "--sha", S40])
+got = pe.events()[-1]
+assert (got["ev"], got["sha"], got["via"], got["clears"]) == ("main_green", S40, "descendant", [R1]), got
+assert prog.main_state(pe.events()) == "green" and prog.cap_from(pe.events(), 6) == 1
+refused(S40, "main is not red")
+# main_red keeps its old rule: only this program's own landed commit.
+try:
+    prog.cmd_record(["ext", "main_red", "--sha", S40])
+    raise AssertionError("main_red accepted an external sha")
+except SystemExit as e:
+    assert "recorded by `landed`" in str(e), e
+prog.compare = real_compare
+
+print("prog.py external green: all pass")
+
 # --- verdict sources are a closed set ------------------------------------------------------------
 real_view, real_pid = prog.pr_view, prog.patch_id
 prog.pr_view, prog.patch_id = (lambda repo, n: {"headRefOid": "h1"}), (lambda repo, n: "p1")
