@@ -391,7 +391,7 @@ orchestrator (사용자가 말을 거는 세션 하나, orchestrate의 top-level
 ### 6.8 대시보드 워커와 맞춘 것 (회신 반영)
 
 - PR 이벤트: `~/.local/state/agent-skills/dashboard/events.jsonl`의 `kind`가 `pr_`로 시작하는 줄, 한 줄 `{"at","kind","id","repo","pr","number","url","owner","owner_kind","actor","checks","head","session","text"}`. 같은 행을 두던 `pr-events.jsonl`은 SSOT PR 6부터 쓰지 않고 읽기 전용 보관본이다. 모르는 `kind`는 무시한다. `owner_kind == human_session`이면 인박스만.
-- 인박스: `orch-dash inbox add --type <approval|run_command|login|verify_failed|verify_ok|ready_to_merge> …`, `orch-dash inbox resolve --key`. 신뢰 창은 `login`.
+- 인박스: `orch-dash inbox add --type <approval|run_command|login|verify_failed|verify_ok|ready_to_merge> …`, `orch-dash inbox resolve --key`(`patrol:`·`pressure:queue:` 키는 원천에서 읽는 항목이라 원천 항목 자체를 닫는다). 신뢰 창은 `login`.
 - `sync.json`에 `interval`(초)을 넣었다. 대시보드는 `at`이 주기의 2배보다 오래되면 멈춤으로 본다.
 - 대시보드 채팅 전송은 `sync.try_send(handle, text) -> (ok, reason)`와 `sync.classify(lines, title, draft)`를 가져다 쓴다. 두 시그니처는 바꾸지 않는다.
 

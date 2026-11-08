@@ -436,7 +436,7 @@ assert not (fleet.state_dir() / "inbox-external.jsonl").exists(), "no copy of a 
 # An old copy of the same key in inbox-external.jsonl (before the move) is not shown twice, and its resolve does not hide the finding.
 fleet.inbox_add("patrol", "old copy", key=shown["key"][4:], source="patrol")
 assert [k["key"] for k in fleet.external_items()] == [shown["key"]] and fleet.external_items()[0]["title"] != "old copy"
-fleet.inbox_resolve(shown["key"][4:])
+fleet.append_line(fleet.state_dir() / "inbox-external.jsonl", {"v": 1, "op": "resolve", "key": shown["key"][4:], "at": ago(0)})
 assert [k["key"] for k in fleet.external_items()] == [shown["key"]]
 patrol.ack(["--all"])
 patrol.write_round([], verd, False, NOW + 420)

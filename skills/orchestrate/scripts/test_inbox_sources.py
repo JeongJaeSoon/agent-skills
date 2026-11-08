@@ -110,7 +110,7 @@ assert tidy.no_reopen("ext:pressure:queue:q-1") is None and tidy.no_reopen("ext:
 inbox = D / "inbox-external.jsonl"
 for key in ("pressure:queue:q-9", "patrol:Gone:2026-11-01T00:00:00Z", "pressure:danger"):
     fleet.inbox_add("pc_pressure" if key.startswith("pressure") else "patrol", f"old {key}", key=key, source="x")
-fleet.inbox_resolve("pressure:queue:q-9")
+fleet.append_line(fleet.state_dir() / "inbox-external.jsonl", {"v": 1, "op": "resolve", "key": "pressure:queue:q-9", "at": fleet.iso(NOW)})  # an old resolve line
 fleet.inbox_add("pc_pressure", "old again", key="pressure:queue:q-9", source="x")
 before = inbox.read_text()
 shown = [i["key"] for i in fleet.external_items()]
@@ -170,6 +170,37 @@ page = sent.page([{**task, "to": f"task:t{i}", "text": "same brief twice", "ts":
                  days=1, now=NOW)
 twice = [r for r in page["rows"] if r["text"] == "same brief twice"]
 assert len(twice) == 2 and sorted(r["source"] for r in twice) == ["log", "orca"], twice
+
+# --- `inbox resolve` on a key read from the source closes it for `inbox list` and the dashboard, not a line nobody reads.
+import subprocess, store  # noqa: E402
+store.import_apply(checks=False)
+env = {**os.environ, "ORCH_FLEET_CONFIG": str(tmp / "none.json"), "AGENT_SKILLS_CONFIG": str(tmp / "none.json"), "TZ": "UTC"}
+
+
+def dash(*args):
+    r = subprocess.run([sys.executable, str(HERE / "dash.py"), "inbox", *args], capture_output=True, text=True, env=env)
+    return r.returncode, r.stdout, r.stderr
+
+
+queue({**q(1, "gave_up", ended=T), "id": "q-0fake001"}, {**q(2, "failed", error="Exit code 1", ended=T), "id": "q-0fake002"})
+fleet.inbox_add("run_command", "still resolves the old way", key="k-run")
+code, out, err = dash("list")
+assert code == 0 and "pressure:queue:q-0fake001" in out and "k-run" in out, (out, err)
+code, out, err = dash("resolve", "--key", "pressure:queue:q-0fake001")
+assert code == 0, err
+code, out, err = dash("list")
+assert "q-0fake001" not in out and "q-0fake002" in out, out
+assert not [i for i in fleet.pressure_items(store.ext_closures(), {}) if "q-0fake001" in i["key"]]
+# Idempotent, and a dismissal on the page hides the item from `inbox list` too.
+assert dash("resolve", "--key", "pressure:queue:q-0fake001")[0] == 0
+fleet.write_atomic(D / "memory.json", json.dumps({"dismissed": {"ext:pressure:queue:q-0fake002": fleet.iso(NOW)}}))
+assert "q-0fake002" not in dash("list")[1]
+# Nothing in the source by that key: refused, so a typo closes nothing.
+code, out, err = dash("resolve", "--key", "pressure:queue:q-nosuch")
+assert code != 0 and "q-nosuch" in err, (out, err)
+assert "pressure:queue:q-nosuch" not in store.ext_closures()
+# A run_command item resolves through its inbox line, as before.
+assert dash("resolve", "--key", "k-run")[0] == 0 and "k-run" not in dash("list")[1]
 
 # --- pr-events.jsonl: nothing writes it; `migrate-inputs` makes the old file read-only.
 old = D / "pr-events.jsonl"
