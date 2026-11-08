@@ -131,7 +131,10 @@ VERIFY      Exact commands, or the repo's .claude/skills/verify-<app> feature to
             waits for the result that run logs.
             A read or act already refused follows FORBIDDEN's refused-act paragraph: no plan is
             written here for it afterwards.
-TIMEBOX     Rough cap. When it runs out, report partial findings with --outcome failed and stop.
+TIMEBOX     Rough cap on working time only. Time spent waiting on something outside the worker
+            (land order, a heavy slot, CI, a review, a human) does not count. A long wait is
+            reported as READY-WAIT or an escalation, not spent against the cap. When working time
+            runs out, report partial findings with --outcome failed and stop.
 LOAD        Before the first edit, load `deliver-ticket` (the Skill tool; a worker on another CLI
             reads its SKILL.md). Inside a program this brief replaces two of its steps: findings
             go in the worker_done body, not in new tickets (§2), and LAND and REPORT replace
@@ -322,7 +325,10 @@ CONTEXT     Files, PRs and links to read. The facts you already have, pasted.
 ACCEPTANCE  Checkable criteria, one per line.
 VERIFY      Exact commands, and the output that proves each criterion.
             A browser check: `orch hold browser` before opening it, `orch release browser` after.
-TIMEBOX     Rough cap. When it runs out, report partial findings with --outcome failed and stop.
+TIMEBOX     Rough cap on working time only. Time spent waiting on something outside the worker
+            (land order, a heavy slot, CI, a review, a human) does not count. A long wait is
+            reported as READY-WAIT or an escalation, not spent against the cap. When working time
+            runs out, report partial findings with --outcome failed and stop.
 LOAD        A change: before the first edit, load `deliver-ticket` (the Skill tool; a worker on
             another CLI reads its SKILL.md). An investigation that only reads and reports:
             `LOAD: none` and why. `hooks/guard.py` warns (key `guard.deliver_load`) at each edit
