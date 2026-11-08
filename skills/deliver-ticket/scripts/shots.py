@@ -111,6 +111,7 @@ if (!ui || draft !== "") {
     } else {
       // One file per chooser, so the URL that appears belongs to that file.
       for (let n = 0; n < INPUT.files.length; n++) {
+        let got = false;
         const seen = new Set(assetUrls(await read()));
         const chooserPromise = page.waitForFileChooser({ timeout: 15000 });
         await page.click(NEW.button);
@@ -120,8 +121,10 @@ if (!ui || draft !== "") {
           await page.waitForTimeout(2000);
           value = await read();
           const fresh = assetUrls(value).find((u) => !seen.has(u));
-          if (fresh && !/Uploading/.test(value)) { urls[INPUT.stems[n]] = fresh; break; }
+          if (fresh && !/Uploading/.test(value)) { urls[INPUT.stems[n]] = fresh; got = true; break; }
         }
+        // A late URL from this file would be taken for the next one's, so stop here.
+        if (!got) break;
       }
     }
   } finally {
@@ -238,13 +241,6 @@ def register(directory, repo, pr):
     return proc.returncode == 0
 
 
-def gh(*args):
-    proc = subprocess.run(["gh", *args], capture_output=True, text=True)
-    if proc.returncode:
-        sys.exit(f"gh {' '.join(args[:2])} failed: {proc.stderr.strip()[:200]}")
-    return proc.stdout
-
-
 def head_status(url):
     """Return (HTTP status, content type); status 0 means the request itself failed."""
     # GET, not HEAD: GitHub redirects to a storage URL signed for GET, which answers a HEAD with 403.
@@ -261,7 +257,10 @@ def check(a):
     if not re.fullmatch(r"[\w.-]+/[\w.-]+", a.repo):
         sys.exit(f"--repo must be owner/repo: {a.repo!r}")
     urls = json.loads(pathlib.Path(a.urls).read_text())
-    bodies = gh("api", "--paginate", f"repos/{a.repo}/issues/{a.pr}/comments", "--jq", ".[].body")
+    proc = subprocess.run(["gh", "api", "--paginate", f"repos/{a.repo}/issues/{a.pr}/comments", "--jq", ".[].body"],
+                          capture_output=True, text=True)
+    # Unreadable comments (a token without access) cannot show whether the image was posted.
+    bodies = proc.stdout if proc.returncode == 0 else None
     # A token without access to a private repo gets 403/404 here too; that is "unknown", not a crash.
     proc = subprocess.run(["gh", "api", f"repos/{a.repo}", "--jq", ".private"], capture_output=True, text=True)
     private = proc.stdout.strip() == "true" if proc.returncode == 0 else None
@@ -269,6 +268,8 @@ def check(a):
     for name, url in urls.items():
         if not url:
             verdict, why = "NOT VERIFIED", "no URL; upload it first"
+        elif bodies is None:
+            verdict, why = "INCONCLUSIVE", "cannot read the PR comments with this gh login"
         elif not re.search(r"(?<![\w/%~=&?#:.-])" + re.escape(url) + r"(?![\w/%~-]|\.[\w/%~-])", bodies):
             # A bare substring test would count .../abc as posted when only .../abcdef is.
             verdict, why = "NOT VERIFIED", "no PR comment references it, so GitHub answers 404"

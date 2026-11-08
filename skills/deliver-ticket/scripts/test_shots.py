@@ -179,7 +179,8 @@ const page = {
   click: async (s) => log(["click", s]),
   waitForFileChooser: async () => ({
     // The new UI writes alt "Image" for every file, whatever it is called.
-    setFiles: async (f) => { log(["setFiles", f]); box.value += `![Image](https://github.com/user-attachments/assets/${f.split("/").pop().replace(/\.png$/, "")})\n`; },
+    // FAKE_SLOW: the first upload has not finished when the poll ends and lands with the next one.
+    setFiles: async (f) => { log(["setFiles", f]); if (process.env.FAKE_SLOW && !box.late) { box.late = true; return; } box.value += `![Image](https://github.com/user-attachments/assets/${f.split("/").pop().replace(/\.png$/, "")})\n`; },
   }),
   cdp: async (m, p) => {
     log(["cdp", m, p]);
@@ -225,6 +226,12 @@ assert json.loads((tmp / "u.json").read_text()) == {"card-1440-light": U + "card
 c = calls()
 assert [x[0] for x in c if x[0] in ("click", "setFiles", "setInputFiles")] == ["click", "setFiles", "click", "setFiles"], c
 assert ["fill", ""] in c
+env["FAKE_SLOW"] = "1"
+r = run("upload", "--repo", "acme/app", "--pr", "1", "--out", str(tmp / "u.json"), "--polls", "1", str(img), str(other))
+c = calls()
+assert [x[0] for x in c if x[0] in ("click", "setFiles")] == ["click", "setFiles"], c
+assert r.returncode == 1 and "missing: card-1440-light" in r.stderr and "missing: card-390-dark" in r.stderr, (r.stdout, r.stderr)
+del env["FAKE_SLOW"]
 env["FAKE_UI"] = "none"
 r = run("upload", "--repo", "acme/app", "--pr", "1", "--out", str(tmp / "u.json"), str(img))
 assert r.returncode != 0 and "no comment box" in r.stderr, r.stderr
@@ -314,7 +321,7 @@ bindir.mkdir()
 gh = bindir / "gh"
 gh.write_text("""#!/bin/sh
 case "$*" in
-  *issues/*/comments*) cat "$FAKE_GH_BODIES" ;;
+  *issues/*/comments*) [ "$FAKE_GH_COMMENTS" = ERR ] && { echo "gh: HTTP 404" >&2; exit 1; }; cat "$FAKE_GH_BODIES" ;;
   *"--jq .private"*) [ "$FAKE_GH_PRIVATE" = ERR ] && { echo "gh: HTTP 403" >&2; exit 1; }; echo "$FAKE_GH_PRIVATE" ;;
   *) echo "unexpected: $*" >&2; exit 1 ;;
 esac
@@ -373,6 +380,13 @@ env["FAKE_GH_PRIVATE"] = "ERR"
 (tmp / "bodies.txt").write_text(forbidden + "\n")
 r = run("check", str(tmp / "c.json"), "--repo", "acme/app", "--pr", "1")
 assert r.returncode == 2 and "INCONCLUSIVE  a: visibility unknown: HTTP 403" in r.stdout, (r.returncode, r.stdout, r.stderr)
+# A token that cannot read a private repo's comments gets 404 there too: inconclusive, not a crash.
+env["FAKE_GH_COMMENTS"] = "ERR"
+r = check_run({"a": good, "b": None}, [], private=True)
+assert r.returncode == 1 and "INCONCLUSIVE  a: cannot read the PR comments" in r.stdout and "NOT VERIFIED  b" in r.stdout, (r.returncode, r.stdout, r.stderr)
+r = check_run({"a": good}, [], private=True)
+assert r.returncode == 2 and "INCONCLUSIVE  a: cannot read" in r.stdout, (r.returncode, r.stdout, r.stderr)
+del env["FAKE_GH_COMMENTS"]
 server.shutdown()
 
 print("test_shots: ok")
