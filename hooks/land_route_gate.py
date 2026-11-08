@@ -351,7 +351,29 @@ def emit(decision, text):
     else:
         out["systemMessage"] = text
         out["hookSpecificOutput"]["additionalContext"] = text
-    print(json.dumps(out))
+    return out
+
+
+def run(event):
+    cmd = (event.get("tool_input") or {}).get("command") if isinstance(event, dict) else None
+    if not isinstance(cmd, str) or "merge" not in cmd or "gh" not in cmd:
+        return None
+    level = config.level(config.load(), KEY, "deny")
+    if level == "off":
+        return None
+    try:
+        try:
+            text, deny = check(event, cmd) or (None, False)
+        except Refuse as e:
+            text, deny = f"{MARK} {SOURCE} {e}", True
+        if text:
+            return emit(level if deny and level != "warn" else None, text)
+    except Unread as e:
+        return emit(None, f"agent-skills hooks/land_route_gate.py passed this call unjudged: {e}.")
+    except Exception as e:
+        config.log_error("land_route_gate", e)
+        return emit(None, f"agent-skills hooks/land_route_gate.py could not finish ({type(e).__name__}) and let this call through.")
+    return None
 
 
 def main():
@@ -359,24 +381,8 @@ def main():
         event = json.load(sys.stdin)
     except ValueError:
         return 0
-    cmd = (event.get("tool_input") or {}).get("command") if isinstance(event, dict) else None
-    if not isinstance(cmd, str) or "merge" not in cmd or "gh" not in cmd:
-        return 0
-    level = config.level(config.load(), KEY, "deny")
-    if level == "off":
-        return 0
-    try:
-        try:
-            text, deny = check(event, cmd) or (None, False)
-        except Refuse as e:
-            text, deny = f"{MARK} {SOURCE} {e}", True
-        if text:
-            emit(level if deny and level != "warn" else None, text)
-    except Unread as e:
-        emit(None, f"agent-skills hooks/land_route_gate.py passed this call unjudged: {e}.")
-    except Exception as e:
-        config.log_error("land_route_gate", e)
-        emit(None, f"agent-skills hooks/land_route_gate.py could not finish ({type(e).__name__}) and let this call through.")
+    if out := run(event):
+        print(json.dumps(out))
     return 0
 
 

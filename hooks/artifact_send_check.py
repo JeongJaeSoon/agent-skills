@@ -49,16 +49,15 @@ def outgoing(data):
     return []
 
 
-def main():
-    data = json.load(sys.stdin)
+def run(data):
     mode = al.level()
     if mode == "off":
-        return
+        return None
     owed = []
     for text in outgoing(data):
         owed += [link for link in al.owed_links(text) if link not in owed]
     if not owed:
-        return
+        return None
     text = al.reason(owed)
     out = {"hookSpecificOutput": {"hookEventName": "PreToolUse"}}
     if mode == "deny":
@@ -66,7 +65,12 @@ def main():
     else:
         out["systemMessage"] = text
         out["hookSpecificOutput"]["additionalContext"] = text
-    print(json.dumps(out, ensure_ascii=False))
+    return out
+
+
+def main():
+    if out := run(json.load(sys.stdin)):
+        print(json.dumps(out, ensure_ascii=False))
 
 
 if __name__ == "__main__":

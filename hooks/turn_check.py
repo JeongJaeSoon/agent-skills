@@ -437,16 +437,17 @@ def telegram(event, cfg):
     return {"systemMessage": f"turn_check: {msg}"}
 
 
-def main():
-    event = json.load(sys.stdin)
+def run(event):
     cfg = config.load()
     if event.get("hook_event_name") == "PreToolUse":
-        out = telegram(event, cfg)
-    elif event.get("stop_hook_active"):
-        return
-    else:
-        out = stop(event, cfg)
-    if out:
+        return telegram(event, cfg)
+    if event.get("stop_hook_active"):
+        return None
+    return stop(event, cfg)
+
+
+def main():
+    if out := run(json.load(sys.stdin)):
         print(json.dumps(out, ensure_ascii=False))
 
 

@@ -1,0 +1,274 @@
+#!/usr/bin/env python3
+"""One hook process per event: runs the modules ENTRIES lists for this tool and prints their merged output.
+
+Each module exposes run(event) -> dict | None, the JSON object its main() used to print. Modules run in order, every
+one to the end (a deny does not stop the rest, as when the hooks ran in parallel), each under its own timeout. A module
+that raises, exits, prints, times out or cannot be imported loses only its own output. Before a call,
+pressure_gate stays its own hooks.json entry: it can hold a start for its queue and fails closed, so it keeps a
+process of its own. artifact_archive stays apart too: it leaves a recovery marker a cancelled run would delete.
+
+`hooks.dispatch: false` in ~/.claude/agent-skills.json runs every module as its own process instead (the old shape)
+and merges the same way; a session that loaded this file before a rollback keeps working through it.
+"""
+import contextlib, importlib, io, json, os, pathlib, re, signal, subprocess, sys, threading
+
+HERE = pathlib.Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+from lib import config  # noqa: E402
+
+BASH = "Bash"
+TRACKERS = "mcp__.*([Ll]inear|[Jj]ira|[Aa]tlassian).*"
+TELEGRAM = "mcp__.*[Tt]elegram.*"
+# (module, matcher, timeout seconds): the matchers and timeouts the per-module hooks.json entries had. Order is the
+# order reasons and messages are joined in.
+ENTRIES = {
+    "PreToolUse": [
+        ("delegate_gate", None, 5),
+        ("guard", "Bash|Monitor|Skill|Edit|Write|MultiEdit|NotebookEdit|AskUserQuestion", 5),
+        ("self_land_gate", BASH, 10),
+        ("land_route_gate", BASH, 20),
+        ("lifecycle", "Bash|Agent|Task", 5),
+        ("prose_check", "Bash|mcp__.*([Ll]inear|[Jj]ira|atlassian).*", 5),
+        ("tracker_gate", TRACKERS, 5),
+        ("stack_gate", BASH, 10),
+        ("record_check", BASH, 5),
+        ("decision_relay", BASH, 5),
+        ("artifact_send_check", "Bash|" + TELEGRAM, 5),
+        ("turn_check", TELEGRAM, 5),
+    ],
+    # After the call pressure_gate only marks the outcome of a retry the queue let through: nothing waits there.
+    "PostToolUse": [("pressure_gate", BASH, 5), ("record_check", BASH, 5)],
+    "PostToolUseFailure": [("pressure_gate", BASH, 5), ("record_check", BASH, 5)],
+    "Stop": [("record_check", None, 5), ("claim_check", None, 5), ("owner_check", None, 5),
+             ("artifact_links_stop", None, 5), ("turn_check", None, 30)],
+    "SubagentStop": [("record_check", None, 5), ("claim_check", None, 5), ("owner_check", None, 5),
+                     ("subagent_log", None, 3), ("turn_check", None, 30)],
+}
+# The matcher of the one hooks.json entry per event: where every module has a matcher, the event is Bash only.
+HOOK_MATCHER = {"PreToolUse": None, "PostToolUse": BASH, "PostToolUseFailure": BASH, "Stop": None, "SubagentStop": None}
+MARGIN = 5       # seconds the hooks.json timeout holds beyond the module limits: imports and the merge
+CAP = 9500       # Claude Code replaces a hook's string over 10,000 characters with a file path and a preview
+RANK = {"deny": 3, "ask": 2, "allow": 1}
+SPEC_KEYS = {"hookEventName", "permissionDecision", "permissionDecisionReason", "additionalContext"}
+
+
+class Skipped(Exception):
+    """A module whose checks did not run for this call: the reason is shown to the model."""
+
+
+class _Timeout(BaseException):  # not an Exception: a module's own `except Exception` must not swallow it
+    pass
+
+
+def matches(matcher, tool):
+    """Claude Code's matcher rules: none matches everything, a plain name list is exact, anything else is a regex search."""
+    if matcher is None:
+        return True
+    if re.fullmatch(r"[A-Za-z0-9_|]+", matcher):
+        return tool in matcher.split("|")
+    return re.search(matcher, tool) is not None
+
+
+def selected(event, tool, entries=None):
+    return [(mod, timeout) for mod, matcher, timeout in (ENTRIES.get(event, []) if entries is None else entries)
+            if matches(matcher, tool)]
+
+
+def budget(event):
+    """The hooks.json timeout of this event's dispatch entry."""
+    return int(sum(t for _, _, t in ENTRIES[event]) + MARGIN + 0.999)
+
+
+def note(why):
+    return f"agent-skills hooks/dispatch.py: {why}, so its checks did not run for this call."
+
+
+def call(module, event, timeout):
+    """module.run(event) under a timeout, or Skipped. A module that raises or exits yields None, as its hook did."""
+    try:
+        mod = importlib.import_module(module)
+        run = mod.run
+    except Exception as e:
+        config.log_error(module, e)
+        raise Skipped(note(f"{module} could not be loaded ({type(e).__name__})"))
+    armed = [True]
+
+    def alarm(*_):
+        if armed[0]:
+            raise _Timeout()
+
+    old = signal.signal(signal.SIGALRM, alarm)
+    signal.setitimer(signal.ITIMER_REAL, timeout)
+    buf, out = io.StringIO(), None
+    try:
+        with contextlib.redirect_stdout(buf):
+            out = run(event)
+        armed[0] = False
+    except _Timeout:
+        raise Skipped(note(f"{module} ran past its {timeout:g}s limit"))
+    except SystemExit:
+        out = None
+    except Exception as e:
+        config.log_error(module, e)
+        out = None
+    finally:
+        armed[0] = False
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, old)
+    if buf.getvalue():
+        config.log_error(module, RuntimeError("wrote to stdout"))
+    if out is not None and not isinstance(out, dict):
+        config.log_error(module, TypeError("run() did not return a dict"))
+        return None
+    return out or None
+
+
+def add(items, text):
+    if isinstance(text, str) and text and text not in items:
+        items.append(text)
+
+
+def fit(parts):
+    """The parts joined by newlines; whole trailing parts go (and are counted) when the text passes CAP."""
+    kept = list(parts)
+    while len(kept) > 1 and len("\n".join(kept)) + 40 > CAP:
+        kept.pop()
+    if len(kept) == len(parts):
+        return "\n".join(parts)
+    config.log_error("dispatch", RuntimeError("merged text passed the cap"))
+    return "\n".join(kept + [f"({len(parts) - len(kept)} more omitted)"])
+
+
+def merge(name, results):
+    """results: [(module, dict)] in module order. Pre: deny > ask > allow with the reasons of the deny and ask modules
+    joined; Stop: a block from any module blocks with every reason; systemMessage and additionalContext joined."""
+    systems, contexts, blocks = [], [], []
+    reasons = {"deny": [], "ask": [], "allow": []}
+    for module, out in results:
+        for key, value in (out or {}).items():
+            if key == "systemMessage":
+                add(systems, value)
+            elif key == "decision" and value == "block":
+                add(blocks, out.get("reason") or "")
+            elif key == "reason" and out.get("decision") == "block":
+                pass
+            elif key == "hookSpecificOutput" and isinstance(value, dict):
+                for k, v in value.items():
+                    if k == "permissionDecision" and v in RANK:
+                        add(reasons[v], value.get("permissionDecisionReason") or "")
+                        if not value.get("permissionDecisionReason"):
+                            reasons[v].append(None)
+                    elif k == "additionalContext":
+                        add(contexts, v)
+                    elif k not in SPEC_KEYS:
+                        config.log_error(module, KeyError(k))
+            else:
+                config.log_error(module, KeyError(key))
+    spec = {}
+    decided = [d for d in RANK if reasons[d]]
+    if decided:
+        win = max(decided, key=RANK.get)
+        text = [r for d in ("deny", "ask") if RANK[d] <= RANK[win] for r in reasons[d] if r] if win != "allow" else \
+            [r for r in reasons["allow"] if r]
+        spec["permissionDecision"] = win
+        if text:
+            spec["permissionDecisionReason"] = "\n".join(text)
+    if contexts:
+        spec["additionalContext"] = fit(contexts)
+    out = {}
+    if spec:
+        out["hookSpecificOutput"] = {"hookEventName": name, **spec}
+    if systems:
+        out["systemMessage"] = fit(systems)
+    if blocks:
+        out["decision"], out["reason"] = "block", "\n".join(blocks)
+    return out or None
+
+
+def legacy(event, chosen):
+    """Every module as its own process, started together: the shape before this file, for `hooks.dispatch: false`."""
+    data, procs = json.dumps(event), []
+    for module, timeout in chosen:
+        p = subprocess.Popen([sys.executable, str(HERE / f"{module}.py")], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                             stderr=subprocess.DEVNULL, text=True)
+        procs.append((module, timeout, p))
+    for module, timeout, p in procs:
+        try:
+            stdout, _ = p.communicate(data, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            p.communicate()
+            yield module, Skipped(note(f"{module} ran past its {timeout:g}s limit"))
+            continue
+        try:
+            yield module, (json.loads(stdout) if stdout.strip() else None)
+        except ValueError as e:
+            config.log_error(module, e)
+            yield module, None
+
+
+def dispatch(event, entries=None, results=None):
+    """The merged output for this event, or None. `results` collects each module's output as it finishes."""
+    name = event.get("hook_event_name")
+    results = [] if results is None else results
+    chosen = selected(name, str(event.get("tool_name") or ""), entries)
+    if entries is None and config.get(config.load(), "hooks.dispatch") is False:
+        pairs = legacy(event, chosen)
+    else:
+        pairs = ((m, _guarded(m, event, t)) for m, t in chosen)
+    for module, out in pairs:
+        results.append(("dispatch", {"systemMessage": str(out)}) if isinstance(out, Skipped) else (module, out))
+    return merge(name, results)
+
+
+def _guarded(module, event, timeout):
+    try:
+        return call(module, event, timeout)
+    except Skipped as s:
+        return s
+
+
+def run_event(event, entries=None, grace=3):
+    """Print dispatch(event). A watchdog prints what finished and ends the process if a module hangs past every limit
+    (a stuck system call ignores the alarm), so a deny that was already decided still reaches Claude Code."""
+    name = event.get("hook_event_name")
+    chosen = ENTRIES.get(name, []) if entries is None else entries
+    if not chosen:
+        return
+    results, lock, printed, stream = [], threading.Lock(), [], sys.stdout  # a module runs with stdout redirected
+
+    def emit(final):
+        with lock:
+            if printed:
+                return
+            printed.append(1)
+            out = merge(name, list(results))
+            if out:
+                stream.write(json.dumps(out, ensure_ascii=False) + "\n")
+            stream.flush()
+            if final:
+                os._exit(0)
+
+    timer = threading.Timer(sum(t for _, _, t in chosen) + grace, emit, args=(True,))
+    timer.daemon = True
+    timer.start()
+    dispatch(event, entries, results)
+    timer.cancel()
+    emit(False)
+
+
+def main():
+    try:
+        event = json.load(sys.stdin)
+    except ValueError:
+        return 0
+    if isinstance(event, dict):
+        try:
+            run_event(event)
+        except Exception as e:
+            config.log_error("dispatch", e)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -55,8 +55,9 @@ assert n and "serves as" in n and "crucial" in n, n
 assert "것 같" in bash('git commit -m "$(cat <<\'EOF\'\nfix: 캐시 문제인 것 같습니다\nEOF\n)"')
 # The same Linear tools arrive as a local server (mcp__linear__) or the claude.ai connector (mcp__claude_ai_Linear__).
 LINEAR = ("mcp__linear__", "mcp__claude_ai_Linear__")
-matchers = [m["matcher"] for m in json.loads((HERE / "hooks.json").read_text())["hooks"]["PreToolUse"]
-            if "prose_check.py" in m["hooks"][0]["command"]]
+sys.path.insert(0, str(HERE))
+import dispatch  # noqa: E402
+matchers = [m for mod, m, _ in dispatch.ENTRIES["PreToolUse"] if mod == "prose_check"]
 for prefix in LINEAR:
     assert any(re.fullmatch(m, prefix + "save_issue") for m in matchers), (prefix, matchers)
     assert "효율적으로" in hook(prefix + "save_issue", {"id": "ABC-1", "description": "요청을 효율적으로 처리한다."})

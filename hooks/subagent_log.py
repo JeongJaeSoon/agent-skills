@@ -49,18 +49,20 @@ def owner_blocks(entries, event):
     return bool(items) and not recorded
 
 
-def main():
+def run(event):
     handle = os.environ.get("ORCA_TERMINAL_HANDLE", "")
-    if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", handle):
-        return
-    event = json.load(sys.stdin)
-    if not isinstance(event, dict):
-        return
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", handle) or not isinstance(event, dict):
+        return None
     if event.get("hook_event_name") == "SubagentStop" and not stop_passes(event):
-        return
+        return None
     import fleet
     fleet.subagent_log(event, handle)
     link_order(event, handle)
+    return None
+
+
+def main():
+    run(json.load(sys.stdin))
 
 
 # A line of its own, so a prompt that only mentions an order id in prose links nothing.

@@ -113,20 +113,23 @@ def unrecorded(body):
     return any(answers.get(i) != " ".join(q.split()) for i, q in found)
 
 
-def main():
-    event = json.load(sys.stdin)
+def run(event):
     if event.get("hook_event_name") != "PreToolUse" or event.get("tool_name") != "Bash":
-        return
+        return None
     if config.level(config.load(), KEY, "warn") == "off" or not roles.applies("decision_relay", roles.session(event)):
-        return
+        return None
     bodies = relay_bodies(str((event.get("tool_input") or {}).get("command") or ""))
     if not any(unrecorded(b) for b in bodies) or recorded_this_turn(event.get("transcript_path")):
-        return
+        return None
     msg = ("decision_relay: this relay quotes the owner and no decision record backs it. Run `orch decide answer <id> "
            "--quote-file <file>` (or `--title T` for an order nobody asked) as a call of its own first, then cite it: "
            f'오너(d150, 2026-11-04): "<words>". ({KEY}: warn)')
-    print(json.dumps({"systemMessage": msg, "hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": msg}},
-                     ensure_ascii=False))
+    return {"systemMessage": msg, "hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": msg}}
+
+
+def main():
+    if out := run(json.load(sys.stdin)):
+        print(json.dumps(out, ensure_ascii=False))
 
 
 if __name__ == "__main__":

@@ -172,24 +172,28 @@ def findings(text):
     return hits[:MAX_HITS]
 
 
-def main():
+def run(event):
     if os.environ.get("AGENT_SKILLS_PROSE_CHECK", "1") == "0":
-        return
-    event = json.load(sys.stdin)
+        return None
     name, args = event.get("tool_name") or "", event.get("tool_input") or {}
     if name == "Bash":
         text = bash_text(args.get("command") or "", event.get("cwd"))
     elif SAVE_TOOL.search(name):
         text = mcp_text(args)
     else:
-        return
+        return None
     hits = findings(text or "")
-    if hits:
-        note = ("prose_check (write-plainly): the text this call publishes has " + "; ".join(hits) + ". If a hit is "
-                "real, fix the text and publish again (edit the PR, amend the commit, or update the ticket); "
-                "a quoted identifier or a template label is fine as it is.")
-        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": note}},
-                         ensure_ascii=False))
+    if not hits:
+        return None
+    note = ("prose_check (write-plainly): the text this call publishes has " + "; ".join(hits) + ". If a hit is "
+            "real, fix the text and publish again (edit the PR, amend the commit, or update the ticket); "
+            "a quoted identifier or a template label is fine as it is.")
+    return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": note}}
+
+
+def main():
+    if out := run(json.load(sys.stdin)):
+        print(json.dumps(out, ensure_ascii=False))
 
 
 if __name__ == "__main__":

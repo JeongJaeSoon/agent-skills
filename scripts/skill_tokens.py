@@ -27,7 +27,7 @@ Token counts are an offline approximation by character class (APPROX_PER_CHAR) u
 count_tokens API with ANTHROPIC_API_KEY (never printed or stored) and fails without it. calibrate fits new coefficients
 from that API on this checkout's files and prints them; it changes nothing. No other path calls any model.
 """
-import json, os, pathlib, re, subprocess, sys, tarfile, tempfile, unicodedata, urllib.error, urllib.request
+import importlib.util, json, os, pathlib, re, subprocess, sys, tarfile, tempfile, unicodedata, urllib.error, urllib.request
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 APPROX_VERSION = "chars-v1"
@@ -42,6 +42,7 @@ REFUSAL_ONLY = "no additionalContext; only its reason when it blocks or denies"
 # When each hook in hooks.json puts text into the context. Hooks are not run here: what they inject depends on
 # session state, so its size comes from transcripts (docs/token-usage.md §2). A hook missing here fails the test.
 HOOKS = {
+    "dispatch.py": "nothing of its own: it runs the hooks listed under the same events and joins their output",
     "onboard.py": "once per profile, until setup is applied or declined",
     "reorient.py": "sessions with a declared orchestrator or lead role: each prompt, and session start",
     "decision.py": "Orca terminals with an open dashboard decision they registered: each prompt",
@@ -212,6 +213,13 @@ def hook_scripts(root):
                 m = re.search(r"hooks/([\w-]+\.py)", h.get("command", ""))
                 if m:
                     found.setdefault(m.group(1), []).append(event)
+    if "dispatch.py" in found:  # its modules are hooks too: hooks.json no longer names them
+        spec = importlib.util.spec_from_file_location("hook_dispatch", root / "hooks" / "dispatch.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        for event, entries in mod.ENTRIES.items():
+            for name, _, _ in entries:
+                found.setdefault(f"{name}.py", []).append(event)
     return found
 
 

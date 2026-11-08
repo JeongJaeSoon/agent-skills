@@ -79,8 +79,8 @@ def pre(tool, tool_input):
 got = pre("Bash", {"command": MERGE})
 assert got and all(d != "deny" for d in got.values()), got
 
-# The other guard rules still deny.
-GUARD = next(c for c in commands("PreToolUse", "Bash") if "guard.py" in c)
+# The other guard rules still deny (guard runs inside the dispatch hook).
+GUARD = next(c for c in commands("PreToolUse", "Bash") if "dispatch.py" in c)
 for cmd in ("pkill -f node", "docker system prune -af", "orch exempt visual 12"):
     assert pre("Bash", {"command": cmd})[GUARD] == "deny", cmd
 assert pre("Write", {"file_path": str(HOME / ".claude/settings.json")})[GUARD] == "deny"
