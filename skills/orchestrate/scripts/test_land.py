@@ -239,6 +239,44 @@ code, out = prog(env, "land", "t", "--pr", "10")
 assert code == 2 and "CI pending" in out, out
 
 
+# 1d. L-465. Fixtures follow one PR's review flow with placeholder values: a review, a fix of its findings, a re-review.
+def verdicts(d, n, *rows):
+    with (d / "programs" / "t" / "ledger.jsonl").open("a") as f:
+        for tree, who, result, extra in rows:
+            f.write(json.dumps({"ts": "2026-09-24T00:00:00+00:00", "ev": "verdict", "pr": n, "sha": extra.pop("sha", f"h{n}"),
+                                "patch_id": pid(n) if tree == "now" else tree, "reviewer": who, "source": f"review:{who}",
+                                "result": result, **extra}) + "\n")
+
+
+# Rule 1: a pass that carries an Act-on finding does not land; the same pass with Act-on 0 does.
+d, env = setup({"1": pr(1)})
+verdicts(d, 1, ("now", "codex", "pass", {"act_on": 1}))
+code, out = prog(env, "land", "t", "--pr", "1")
+assert code != 0 and "landed" not in out and not any(e["ev"] == "landed" for e in ledger(d)), out
+d, env = setup({"1": pr(1)})
+verdicts(d, 1, ("now", "codex", "pass", {"act_on": 0}))
+code, out = prog(env, "land", "t", "--pr", "1")
+assert code == 0 and "landed #1" in out, out
+
+# Rule 2, still flowing: Act-on 0, then a rebase only (new head sha, same patch-id, re-recorded by the same reviewer).
+d, env = setup({"2": pr(2)})
+verdicts(d, 2, ("now", "codex", "pass", {"sha": "before-rebase", "act_on": 0}), ("now", "codex", "pass", {"act_on": 0}))
+code, out = prog(env, "land", "t", "--pr", "2")
+assert code == 0 and "landed #2" in out, out
+
+# Rule 2, still flowing: Act-on handled and re-reviewed by the other family passes; by the same family it waits.
+d, env = setup({"3": pr(3)})
+verdicts(d, 3, ("old-tree", "codex", "fail", {"act_on": 1}), ("now", "claude-reviewer", "pass", {"act_on": 0}))
+code, out = prog(env, "land", "t", "--pr", "3")
+assert code == 0 and "landed #3" in out, out
+d, env = setup({"4": pr(4)})
+verdicts(d, 4, ("old-tree", "codex", "fail", {"act_on": 1}), ("now", "codex", "pass", {"act_on": 0}))
+code, out = prog(env, "land", "t", "--pr", "4")
+assert code == 3 and "another family" in out and not any(e["ev"] == "landed" for e in ledger(d)), out
+code, out = prog(env, "land-check", "t", "--pr", "4")
+assert code == 1 and "another family" in out, out
+
+
 def no_ci_setup(*prs_, **state):
     """A repo declared CI-less: an empty rollup, no run at any head, and the key on."""
     prs = {}

@@ -23,7 +23,9 @@ Usage: orch <command> <slug> [options]
                                      caused, a skill or script defect. PTR points at the proof (message
                                      id, PR comment URL, transcript path:line); nothing is copied in
   verdict <slug> --pr N --sha REVIEWED_HEAD --source WHO [--reviewer NAME] [--evidence LINK_OR_SHA]
-                 [--result pass|fail] [--note TEXT]
+                 [--result pass|fail] [--act-on N] [--note TEXT]
+                                     --act-on is the review's Act-on count: 1 or more records a pass as a fail, and a
+                                     tree that changed since the last review needs the other reviewer family.
                                      the row keeps the PR's author sessions, the reviewer, the evidence and the
                                      recorder. A pass is stored only when all four are named and neither the
                                      reviewer, the --source reviewer nor the recorder is the author; otherwise it
@@ -541,11 +543,21 @@ def final_check_current(events):
 
 def pr_state(events):
     """Latest event of each kind per PR, in ledger order."""
+    import landjudge
     st = {}
     for e in events:
         if e.get("pr") is not None:
+            if e.get("ev") == "verdict" and landjudge.effective_result(e) != e.get("result"):
+                e = {**e, "result": "fail"}  # a pass with an Act-on finding (L-465) reads as the fail it is
             st.setdefault(e["pr"], {"pr": e["pr"]})[e["ev"]] = e
     return st
+
+
+def family_problem(events, pr):
+    """Why the PR's standing verdict needs a reviewer of another family (L-465), else None. Reads every verdict row."""
+    import landjudge
+    rows = [e for e in events if e.get("ev") == "verdict" and e.get("pr") == pr]
+    return landjudge.cross_family_problem(rows[:-1], rows[-1]) if rows else None
 
 
 def ready_prs(events):
@@ -2332,6 +2344,13 @@ def cmd_verdict(argv):
     if authors == []:  # Orca answered: no worktree holds the branch name. Look for the card by the PR's head sha.
         authors = worktree_author_sessions(head)
     result = opt(argv, "--result", "pass")
+    act_on = opt(argv, "--act-on")
+    if act_on is not None and not act_on.isdigit():
+        sys.exit("--act-on is the review's Act-on finding count, a whole number (0 when it found none)")
+    act_on = int(act_on) if act_on is not None else None
+    if result == "pass" and act_on:  # L-465: Act-on findings left means the review did not pass
+        print(f"note: {act_on} Act-on finding(s): recorded as a fail, fix them and review the new head", file=sys.stderr)
+        result = "fail"
     if authors is None:  # Orca did not give a complete answer: not "no card", so a pass cannot be judged
         if result == "pass":
             sys.exit("verdict refused, nothing recorded: Orca's terminal or worktree list could not show who wrote this"
@@ -2345,7 +2364,13 @@ def cmd_verdict(argv):
     # stored at all: a stored pass would let the direct `orch land` path, which reads no identity, merge on it.
     if result == "pass" and (bad := verdict_identity_problem({**fields, "source": src})):
         sys.exit(f"verdict refused, nothing recorded: {bad}")
-    row = p.append("verdict", pr=pr, sha=head, patch_id=patch_id(p.cfg["repo"], pr),
+    pid_now = patch_id(p.cfg["repo"], pr)
+    if result == "pass":  # a pass the gate would hold anyway is refused here, where the reviewer can still be chosen
+        import landjudge
+        prior = [e for e in p.events() if e.get("ev") == "verdict" and e.get("pr") == pr]
+        if bad := landjudge.cross_family_problem(prior, {"patch_id": pid_now, "reviewer": reviewer, "source": src}):
+            sys.exit(f"verdict refused, nothing recorded: {bad}")
+    row = p.append("verdict", pr=pr, sha=head, patch_id=pid_now, act_on=act_on,
                    source=src, result=result, note=opt(argv, "--note"), **fields)
     print(json.dumps(row, ensure_ascii=False))
 
@@ -2746,6 +2771,9 @@ def merge_unit(p, pr, unit, klass, events, onto=None, stacked=False, expect=None
         if patch_id(repo, n) != verdict.get("patch_id"):
             note_attempt(p, events, pr, "blocked", [f"patch of #{n} changed since its verdict"])
             return 3, f"act: the patch of #{n} changed since its verdict (conflict fix, restack or edit): re-review, then orch verdict"
+        if bad := family_problem(events, n):
+            note_attempt(p, events, pr, "blocked", [f"#{n}: {bad}"])
+            return 3, f"act: #{n}: {bad}: review it with the other family, orch verdict, land again"
         failed, pending, r_ = ci_summary(v["statusCheckRollup"], no_ci)
         runs += r_
         if failed or pending or v["mergeStateStatus"] in ("BEHIND", "DIRTY"):
@@ -3246,6 +3274,8 @@ def cmd_land_check(argv):
         problems.append(f"patch changed since verdict ({verdict.get('patch_id', '')[:10]} -> {cur[:10]}): re-review")
     if "no_ci_sha" in why:
         problems.append(f"no-CI lane: verdict is for {verdict['sha'][:8]}, not the head {v['headRefOid'][:8]}: re-review")
+    if passing and (bad := family_problem(events, pr)):
+        problems.append(bad)
     ex, ex_unknown = None, False
     # The same decision `orch land` makes, on the repo GitHub serves now: the recorded name alone reads a renamed
     # repo as one the executor does not cover, and passes a verdict the executor then refuses. It is read also with no

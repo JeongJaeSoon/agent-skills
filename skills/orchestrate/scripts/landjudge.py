@@ -32,6 +32,47 @@ class Judgment:
         return f"Judgment({self.state!r}, {self.why!r})"
 
 
+def act_on_count(v):
+    """The Act-on count of a verdict row's `act_on`, or None when it is absent or not a real int (a bool is not one)."""
+    return v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else None
+
+
+def effective_result(v):
+    """A row's result as the land gate reads it: a pass with one or more Act-on findings is a fail, so a row that
+    says pass and carries act_on >= 1 (a hand-written or older one) cannot land."""
+    result = v.get("result")
+    return "fail" if result == "pass" and (act_on_count(v.get("act_on")) or 0) >= 1 else result
+
+
+FAMILIES = {"codex": ("codex", "gpt", "openai"), "claude": ("claude", "opus", "sonnet", "haiku", "fable", "anthropic")}
+
+
+def family(v):
+    """The reviewer family of a verdict row, from --reviewer else the name inside a review:/verifier: source; None when
+    no name is given (independent-review, subagent-review). An unlisted name is its own family. This is a guardrail on
+    the recorded name, not proof of who ran the review."""
+    kind, _, what = str(v.get("source") or "").partition(":")
+    name = (v.get("reviewer") or (what if kind in ("review", "verifier") else "") or "").strip().casefold()
+    if not name:
+        return None
+    return next((fam for fam, marks in FAMILIES.items() if any(m in name for m in marks)), name)
+
+
+def cross_family_problem(history, cur):
+    """Why `cur`, the verdict standing for a PR, needs a reviewer of another family, else None. `history` is the PR's
+    earlier verdict rows, oldest first. The reference is the newest earlier row on a different patch-id: a rebase keeps
+    the patch-id, so a head that only moved is not reviewed again, while a tree that changed since the last review
+    (Act-on fixed, an edit, a conflict resolution) is. A row with no patch-id or no family never blocks."""
+    prev = next((h for h in reversed(history) if h.get("patch_id") and h["patch_id"] != cur.get("patch_id")), None)
+    if prev is None or not cur.get("patch_id"):
+        return None
+    before, now = family(prev), family(cur)
+    if before and now and before == now:
+        return (f"the tree changed since {str(prev.get('sha') or '')[:8]} was reviewed by {before}: the verdict for this"
+                f" head must come from a reviewer of another family, not {now} again")
+    return None
+
+
 def _prefix(a, b):
     return bool(a) and bool(b) and (a.startswith(b) or b.startswith(a))
 

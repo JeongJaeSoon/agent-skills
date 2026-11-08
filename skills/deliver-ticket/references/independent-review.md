@@ -8,7 +8,10 @@ files and tests. Do not seed the review with the implementer's conclusions.
 
 Run `python3 -I "${CLAUDE_SKILL_DIR}/scripts/review_pick.py" --repo <checkout>` first. It prints
 `<codex|claude|none> <why>`; run the reviewer it names and record it as `review:codex` or `review:claude`
-(`orch verdict --source review:codex` in a program; the PR body names it either way). The setting is
+(`orch verdict --source review:codex --act-on <N>` in a program, N the round's Act-on count; the PR body names it
+either way). In a program the land gate treats Act-on ≥ 1 as a fail, and asks the other family (codex or claude) to
+review a head whose tree changed since the last review; `orchestrate` `references/landing.md`, "Two review rules".
+The setting is
 `review` in `~/.claude/agent-skills.json`:
 
 ```json

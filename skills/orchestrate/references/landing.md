@@ -12,6 +12,15 @@ This design replaced three that failed:
 
 One PR's own facts (state, draft, merge state, CI, verdict against the patch, STOP, hold) are classified in one place, `scripts/landjudge.py`. `land-check` lists its reasons and the brief's "next" cell shows its first state. The program-wide checks below (main red, stacks, threads, evidence) stay with `land-check` and `land`.
 
+## Two review rules
+
+Both read the verdict rows in the ledger, in `scripts/landjudge.py`, and both hold `orch land`, the land executor and `land-check`.
+
+- **Act-on 1 or more is a fail.** `orch verdict --act-on N` records the review's Act-on count. With N ≥ 1 a `--result pass` is stored as a fail, and a row that says pass but carries `act_on` ≥ 1 reads as a fail wherever the ledger is read. Fix the findings, review the new head, record again. A row without `act_on` is read as it was: record the count on every independent review.
+- **A changed tree needs the other reviewer family.** When the PR's patch-id differs from the newest earlier verdict row on another patch-id, the standing verdict must come from a different family than that row's (`codex`, `claude`, or the name itself for any other reviewer, taken from `--reviewer` or a `review:<name>` source). The first review of a PR has nothing to cross with. A rebase keeps the patch-id, so a head that only moved is not reviewed again by a second family, and neither is a re-recorded verdict on the same tree. `orch verdict` refuses a pass that would be held for this reason and stores nothing; a fail always records. Rows with no patch-id or no reviewer name (recorded before this rule, or `independent-review`) never block. The family comes from the recorded name: it stops the same family re-reviewing its own fixes by habit, and proves nothing against a forged name.
+
+Example, shaped after one PR's flow with placeholder values: codex reviews tree A, Act-on 1 (`--act-on 1`, stored as a fail). The fix changes the tree to B. A codex verdict on B is held (`another family`); a claude verdict on B with `--act-on 0` lands. Had codex found Act-on 0 on A and the PR only been rebased, the same verdict lands at the new head with no second review.
+
 ## Repository settings this assumes
 
 - Branch protection keeps the required checks, with **"require branches to be up to date" off**. No admin bypass.
@@ -22,7 +31,7 @@ One PR's own facts (state, draft, merge state, CI, verdict against the patch, ST
 
 **Normal lane** (most PRs). `land` merges as soon as all of these hold at the current head:
 
-- a passing verdict whose patch-id matches the PR now
+- a passing verdict whose patch-id matches the PR now, with no Act-on finding and, when the tree changed since an earlier review, from the other reviewer family (see "Two review rules" below)
 - CI completed and green, with every workflow run at the head finished. No checks yet counts as pending (a repo with no workflows lands only through the no-CI lane below), and so does a rollup that holds only a bot's status or the first jobs of a run (jobs behind `needs` appear later). A green check is not proof, so read the logs of the runs it prints.
 - zero unresolved review threads, read right before the merge; unreadable threads hold it
 - no conflict, not a draft
@@ -256,7 +265,7 @@ A gate answered hold becomes a held item naming the PR (`orch board later add "<
 
 Merging inside `orch land`, or in the land executor where it is on, is what lets a worker land without a per-merge approval prompt. The plugin's PreToolUse hook (`hooks/guard.py`) makes the permission decisions a program needs, for every session and subagent where the plugin is enabled:
 
-- allow this plugin's skills, `orca orchestration <verb>` except reset, worker-abandon and gate-resolve, and `orch <subcommand>` except heavy, set, init, backfill and land-exec (the checks above are the review gate). `orch verdict` is allowed only in its attributable form: a program, `--pr` (a number), `--sha`, `--source`, `--reviewer`, `--evidence` and `--result pass|fail` (and `--note` if wanted), each flag once with a value, and no `--repo`. Any other `orch verdict` gets no hook decision and goes to the classifier, which can refuse it as "Merge Without Review". The hook checks only that shape; `prog.py` still refuses a pass whose reviewer or recorder is the PR's author session
+- allow this plugin's skills, `orca orchestration <verb>` except reset, worker-abandon and gate-resolve, and `orch <subcommand>` except heavy, set, init, backfill and land-exec (the checks above are the review gate). `orch verdict` is allowed only in its attributable form: a program, `--pr` (a number), `--sha`, `--source`, `--reviewer`, `--evidence` and `--result pass|fail` (and `--note` or `--act-on` if wanted), each flag once with a value, and no `--repo`. Any other `orch verdict` gets no hook decision and goes to the classifier, which can refuse it as "Merge Without Review". The hook checks only that shape; `prog.py` still refuses a pass whose reviewer or recorder is the PR's author session
 - only for one simple command: an operator, redirection or substitution gets no decision
 - deny reading another terminal's Orca mailbox
 

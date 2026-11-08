@@ -124,4 +124,45 @@ assert body.index('print("note: main CI') < body.index("patch_id(repo, pr)"), "t
 # A fact the caller tried and failed to read stops the judgment, and names the fact.
 assert judge({"state": "OPEN", "draft": False, "merge_state": UNREAD}, "check").why == {"unknown": "merge_state"}
 assert judge({"draft": UNREAD, "merge_state": "CLEAN"}, "row").state == "unknown"
+
+# Rule 1 (L-465): an independent review with one or more Act-on findings is a fail, whatever result the row says.
+eff = landjudge.effective_result
+assert eff({"result": "pass"}) == "pass" and eff({"result": "pass", "act_on": 0}) == "pass"
+assert eff({"result": "pass", "act_on": 1}) == "fail" and eff({"result": "pass", "act_on": 3}) == "fail"
+assert eff({"result": "fail", "act_on": 0}) == "fail"
+for bad in (True, -1, "1", 1.5, None):  # a malformed count reads as no count: only a real int >= 1 flips a pass
+    assert eff({"result": "pass", "act_on": bad}) == "pass", bad
+assert landjudge.act_on_count("2") is None and landjudge.act_on_count(2) == 2 and landjudge.act_on_count(True) is None
+
+# Rule 2 (L-465): a tree that changed since a reviewed head needs a verdict from another reviewer family. The same tree
+# at a new sha (a rebase) does not. Fixtures are shaped after one PR's review flow; the values are placeholders.
+fam = landjudge.family
+assert fam({"reviewer": "codex"}) == fam({"source": "review:codex"}) == "codex"
+assert fam({"reviewer": "gpt-5.5"}) == "codex"
+assert fam({"reviewer": "fresh-claude-subagent"}) == fam({"source": "review:opus"}) == "claude"
+assert fam({"source": "independent-review"}) is None and fam({}) is None  # unnamed: unknown, never blocks
+assert fam({"source": "review:acme-linter"}) == "acme-linter"
+
+
+def row(tree, who, result="pass", **kw):
+    return {"ev": "verdict", "pr": 7, "sha": "s" + tree, "patch_id": tree, "reviewer": who, "result": result, **kw}
+
+
+cross = landjudge.cross_family_problem
+# first review of a PR: nothing to cross with
+assert cross([], row("A", "codex")) is None
+# Act-on 0 from one family, then a rebase only (same patch-id, new sha): no second family required
+assert cross([row("A", "codex")], row("A", "codex", sha="rebased")) is None
+# Act-on handled, tree changed: the same family again is refused, the other family passes
+history = [row("A", "codex", "fail", act_on=1)]
+assert "claude" not in (cross(history, row("B", "codex")) or "") and cross(history, row("B", "codex"))
+assert cross(history, row("B", "claude-reviewer")) is None
+# The reference is the newest earlier verdict on a different tree: B reviewed by claude, then C needs codex
+history = [row("A", "codex", "fail", act_on=1), row("B", "claude-reviewer")]
+assert cross(history, row("C", "claude-reviewer")) and cross(history, row("C", "codex")) is None
+# A rebase of B after that review is still B: the reference stays the A row, whose family differs
+assert cross(history, row("B", "claude-reviewer", sha="rebased")) is None
+# Rows with no patch-id or no family (recorded before the rule) never block
+assert cross([row("A", "codex", patch_id=None)], row("B", "codex")) is None
+assert cross([{"ev": "verdict", "patch_id": "A", "source": "independent-review"}], row("B", "codex")) is None
 print("ok")

@@ -281,7 +281,7 @@ def bash(cmd, background, who, cwd=None):
     return None, None
 
 
-VERDICT_FLAGS = {"--pr", "--sha", "--source", "--reviewer", "--evidence", "--result", "--note"}
+VERDICT_FLAGS = {"--pr", "--sha", "--source", "--reviewer", "--evidence", "--result", "--note", "--act-on"}
 
 
 def verdict_allowed(args):

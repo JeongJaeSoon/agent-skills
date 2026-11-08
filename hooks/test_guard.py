@@ -60,7 +60,8 @@ VERDICT = "orch verdict p --pr 1 --sha abc123 --source review:codex --reviewer c
 assert bash(f"{VERDICT} pass") == "allow"
 assert bash(f"{VERDICT} fail") == "allow"
 assert bash(f"{VERDICT} pass --note 'round 1'") == "allow"
-for cmd in (f"{VERDICT} maybe", f"{VERDICT} pass --result fail", f"{VERDICT} pass --repo o/r",
+assert bash(f"{VERDICT} fail --act-on 2") == "allow"  # the Act-on count of the review (L-465)
+for cmd in (f"{VERDICT} pass --act-on", f"{VERDICT} pass --act-on 1 --act-on 2",f"{VERDICT} maybe", f"{VERDICT} pass --result fail", f"{VERDICT} pass --repo o/r",
             f"{VERDICT} pass --unknown x", f"{VERDICT} pass --note", f"{VERDICT} pass; id", f"{VERDICT} pass > f",
             "orch verdict p --pr 1 --sha abc --source review:codex --reviewer codex --result pass",
             "orch verdict p --pr 1 --sha abc --source review:codex --evidence e --result pass",
