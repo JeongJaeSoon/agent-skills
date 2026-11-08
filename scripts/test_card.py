@@ -131,6 +131,21 @@ GOALS = []
 REAL_START_GOAL_INPUT = card.start_goal_input
 card.start_goal_input = lambda handle, line, name, worktree=None: GOALS.append((handle, line, name, worktree)) or {"log": f"{name}.goal.log"}
 
+# Only the FakePopen block near the end may run the real start_goal_input. Anywhere else it would leave a
+# `goal-after-idle` helper polling a fake handle for an hour, so the default Popen refuses that command and records it.
+LEAKED = []
+REAL_POPEN = card.subprocess.Popen
+
+
+def guarded_popen(cmd, *a, **kw):
+    if "goal-after-idle" in cmd:
+        LEAKED.append(cmd)
+        raise AssertionError(f"a test reached the real goal-after-idle Popen: {cmd}")
+    return REAL_POPEN(cmd, *a, **kw)
+
+
+card.subprocess.Popen = guarded_popen
+
 ORCA_DATA = tmp / "orca-data"  # never the real Orca profile store
 os.environ["AGENT_SKILLS_ORCA_DATA_DIR"] = str(ORCA_DATA)
 
@@ -1166,7 +1181,6 @@ try:
 finally:
     sync.orca = real_orca
 card.time.sleep = REAL_SLEEP
-card.start_goal_input = REAL_START_GOAL_INPUT
 spawned = []
 
 
@@ -1260,11 +1274,13 @@ class FakePopen:
 
 
 real_popen, card.subprocess.Popen = card.subprocess.Popen, FakePopen
+stub_start_goal_input, card.start_goal_input = card.start_goal_input, REAL_START_GOAL_INPUT
 try:
     log = card.start_goal_input("term_w", LINE, "g4")
     card.start_goal_input("term_w", LINE, "g5", "/wt/x")
 finally:
     card.subprocess.Popen = real_popen
+    card.start_goal_input = stub_start_goal_input
 cmd, kw = spawned[0]
 assert cmd[1:] == [str(HERE / "card.py"), "goal-after-idle", "term_w", LINE] and kw["start_new_session"], spawned
 assert spawned[1][0][1:] == [str(HERE / "card.py"), "goal-after-idle", "term_w", LINE, "/wt/x"], spawned
@@ -1299,5 +1315,9 @@ assert card_module.handle_of(with_terminal) == "term_a", card_module.handle_of(w
 assert card_module.handle_of({**structured, "worker": {"terminal": "term_b"}}) == "term_b"
 assert card_module.handle_of(structured) == "structured-agent-session-claude_x", "no terminal named: the structured handle stays"
 assert card_module.handle_of({"launch": {"outcome": {"handle": "term_c"}}, "effects": [{"kind": "terminal", "role": "agent", "id": "term_a"}]}) == "term_c"
+
+# Guard: no test outside the FakePopen block reached the real goal-after-idle Popen, and the stub is back in place.
+assert not LEAKED, LEAKED
+assert card.start_goal_input is not REAL_START_GOAL_INPUT, "the stub must stay in place outside the FakePopen block"
 
 print("ok")
