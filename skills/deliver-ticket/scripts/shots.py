@@ -247,8 +247,9 @@ def gh(*args):
 
 def head_status(url):
     """Return (HTTP status, content type); status 0 means the request itself failed."""
+    # GET, not HEAD: GitHub redirects to a storage URL signed for GET, which answers a HEAD with 403.
     try:
-        with urllib.request.urlopen(urllib.request.Request(url, method="HEAD"), timeout=15) as r:
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"Range": "bytes=0-0"}), timeout=15) as r:
             return r.status, r.headers.get("Content-Type", "")
     except urllib.error.HTTPError as e:
         return e.code, ""
@@ -273,7 +274,7 @@ def check(a):
             verdict, why = "NOT VERIFIED", "no PR comment references it, so GitHub answers 404"
         else:
             status, ctype = head_status(url)
-            if status == 200 and ctype.startswith("image/"):
+            if status in (200, 206) and ctype.startswith("image/"):
                 verdict, why = "VERIFIED", ctype
             elif private and status in (0, 401, 403, 404):
                 verdict, why = "INCONCLUSIVE", f"private repo: HTTP {status} without a signed-in session"

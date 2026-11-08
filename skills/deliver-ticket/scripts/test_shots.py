@@ -277,12 +277,30 @@ import http.server, threading
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
-    def do_HEAD(self):
+    def reply(self):
         status, ctype = {"/ok": (200, "image/png"), "/page": (200, "text/html"),
                          "/forbidden": (403, "text/plain")}.get(self.path, (404, "text/plain"))
+        if self.path == "/redirect":
+            # GitHub redirects to a URL pre-signed for GET only: S3 answers 403 to a HEAD.
+            self.send_response(302)
+            self.send_header("Location", "/signed")
+            self.end_headers()
+            return False
+        if self.path == "/signed":
+            status, ctype = (200, "image/png") if self.command == "GET" else (403, "application/xml")
+        if status == 200 and self.headers.get("Range"):
+            status = 206
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.end_headers()
+        return True
+
+    def do_HEAD(self):
+        self.reply()
+
+    def do_GET(self):
+        if self.reply():
+            self.wfile.write(b"x")
 
     def log_message(self, *args):
         pass
@@ -317,7 +335,7 @@ good, html, gone = base + "/ok", base + "/page", base + "/gone"
 r = check_run({"a-390-dark": good}, [f'<img src="{good}">'], private=False)
 assert r.returncode == 0 and "VERIFIED  a-390-dark: image/png" in r.stdout, (r.stdout, r.stderr)
 r = check_run({"a": html}, [html], private=False)
-assert r.returncode == 1 and "NOT VERIFIED  a: HTTP 200 text/html" in r.stdout, r.stdout
+assert r.returncode == 1 and "NOT VERIFIED  a: HTTP 206 text/html" in r.stdout, r.stdout
 # A URL that is only the start of a longer posted one is not posted.
 r = check_run({"a": good}, [f'<img src="{good}def">'], private=False)
 assert r.returncode == 1 and "no PR comment references it" in r.stdout, r.stdout
@@ -339,6 +357,9 @@ r = check_run({"a": gone}, [gone], private=True)
 assert r.returncode == 2 and r.stdout.startswith("INCONCLUSIVE  a: private repo"), (r.returncode, r.stdout)
 r = check_run({"a": gone, "b": good}, [gone], private=True)
 assert r.returncode == 1 and "INCONCLUSIVE  a" in r.stdout and "NOT VERIFIED  b" in r.stdout, r.stdout
+redirect = base + "/redirect"
+r = check_run({"a": redirect}, [redirect], private=False)
+assert r.returncode == 0 and "VERIFIED  a: image/png" in r.stdout, (r.returncode, r.stdout)
 forbidden = base + "/forbidden"
 r = check_run({"a": forbidden}, [forbidden], private=True)
 assert r.returncode == 2 and r.stdout.startswith("INCONCLUSIVE  a: private repo: HTTP 403"), (r.returncode, r.stdout)
