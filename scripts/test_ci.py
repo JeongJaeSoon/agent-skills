@@ -115,7 +115,7 @@ class CiTests(Repo):
         marks.mkdir()
         body = ("import pathlib, sys, time\n"
                 "d = pathlib.Path({marks!r})\n"
-                "(d / {name!r}).write_text('x')\n"
+                "with open(d / {name!r}, 'a') as f: f.write('x')\n"
                 "end = time.time() + 15\n"
                 "while len(list(d.iterdir())) < 3:\n"
                 "    if time.time() > end: sys.exit(1)\n"
@@ -125,6 +125,7 @@ class CiTests(Repo):
         code, out = self.run_jobs(3, timeout=30)
         self.assertEqual(code, 0, out)
         self.assertEqual(sorted(marks.iterdir()), [marks / n for n in "abc"])
+        self.assertEqual([(marks / n).read_text() for n in "abc"], ["x"] * 3, "a file ran more than once")
         self.assertIn("3/3 passed", out)
         self.assertEqual(out.count("ok  "), 3)
 
