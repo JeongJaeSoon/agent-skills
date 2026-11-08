@@ -302,6 +302,40 @@ r = subprocess.run([sys.executable, str(driver)], capture_output=True, text=True
 assert r.returncode == 0 and r.stdout.count("\n") == 1 and "noise" not in r.stdout, r
 assert json.loads(r.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny" and "noisy" not in r.stdout, r
 
+# text left in the process's own stdout buffer (no newline, no flush) is caught too, and the deny stays valid JSON
+fake("fake_bufnoise", """
+    import sys
+    def run(event):
+        sys.__stdout__.write("BUFFERED NOISE")
+        return {"systemMessage": "from the buffered one"}
+""")
+driver.write_text(textwrap.dedent(f"""
+    import sys
+    sys.path[:0] = [{str(HERE)!r}, {str(FAKES)!r}]
+    import dispatch
+    dispatch.run_event({EV!r}, [("fake_deny", None, 1), ("fake_bufnoise", None, 1)], grace=1)
+"""))
+r = subprocess.run([sys.executable, str(driver)], capture_output=True, text=True, timeout=30)
+assert r.returncode == 0 and "BUFFERED" not in r.stdout and "buffered one" not in r.stdout, r
+assert json.loads(r.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny", r
+
+# ---- a legacy child whose descendant keeps the pipe open neither holds the wait nor hides the next child's deny
+fake("fake_heir", """
+    import subprocess, sys, time
+    sys.stdin.read()
+    subprocess.Popen([sys.executable, "-c", "import time; time.sleep(6)"])  # inherits stdout
+    time.sleep(30)
+""")
+dispatch.HERE = FAKES
+try:
+    t0 = time.monotonic()
+    got = list(dispatch.legacy({"x": 1}, [("fake_heir", 0.3), ("fake_alarmchild", 5)]))
+    spent = time.monotonic() - t0
+finally:
+    dispatch.HERE = real_here
+assert isinstance(got[0][1], dispatch.Skipped) and got[1][1] == {"decision": "block", "reason": "quick"}, got
+assert spent < 4, spent
+
 # ---- a hung module (signals blocked) still lets the finished deny out before the process ends
 fake("fake_hang", """
     import signal, time

@@ -117,6 +117,10 @@ def call(module, event, timeout):
         armed[0] = False
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, old)
+        try:  # text still in the process's own stdout buffer must land in the sink, not after the restore
+            sys.__stdout__.flush()
+        except Exception:
+            pass
         os.dup2(saved, 1)
         os.close(saved)
         raw = sink.seek(0, os.SEEK_END)
@@ -218,7 +222,10 @@ def legacy(event, chosen):
             stdout, _ = p.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             p.kill()
-            p.communicate()
+            try:  # a descendant that kept the pipe open must not hold this wait, or the other children's results
+                p.communicate(timeout=1)
+            except subprocess.TimeoutExpired:
+                p.stdout.close()
             return Skipped(note(f"{module} ran past its {timeout:g}s limit"))
         try:  # bytes, decoded here: one child's bad bytes cost only that child
             out = json.loads(stdout.decode("utf-8")) if stdout.strip() else None
