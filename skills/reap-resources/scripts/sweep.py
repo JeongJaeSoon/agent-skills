@@ -209,7 +209,7 @@ def owner_interval():
 
 
 def lags():
-    return {"hard": 2 * interval() + 600, "reap": JANITOR_LAG_S}
+    return {"hard": 2 * owner_interval() + 600, "reap": JANITOR_LAG_S}
 
 
 def shadow_keep(item, protect, cleaner):
@@ -834,10 +834,19 @@ def read_cycle():
     # fails == MAX_STEP_FAILS: the last allowed attempt was written and never finished (killed)
     if type(pos) is not int or type(fails) is not int or not 0 <= pos < len(STEPS) or not 0 <= fails <= MAX_STEP_FAILS:
         return 0, 0, None, f"sweep: {cycle_path().name} 의 값이 맞지 않아 사이클을 처음부터 시작함"
-    if not (isinstance(gave, dict) and gave.get("step") in STEPS and finite(gave.get("at"))
-            and time.time() - gave["at"] < 86400):
+    now = time.time()
+    stamp_ok = lambda t: type(t) in (int, float) and 0 < t < 1e11  # noqa: E731  (a huge int would overflow the float math)
+    if not (isinstance(gave, dict) and gave.get("step") in STEPS and stamp_ok(gave.get("at"))
+            and 0 < now - gave["at"] < 86400):
         gave = None
+    at = d.get("at")  # when the last step started; older than two cycles means the automation was off
+    if stamp_ok(at) and now - at > 2 * CYCLE_S:
+        return 0, 0, gave, f"sweep: {cycle_path().name} 의 마지막 단계가 {int((now - at) // 60)}분 전이라 사이클을 처음부터 시작함"
     return pos, fails, gave, None
+
+
+def save_cycle(pos, fails, gave):
+    save_json(cycle_path(), {"next": pos, "fails": fails, "gave_up": gave, "at": time.time()})
 
 
 def run_cycle_step():
@@ -854,7 +863,7 @@ def run_cycle_step():
         pos, fails = (pos + 1) % len(STEPS), 0
     name, fails = STEPS[pos], fails + 1
     try:
-        save_json(cycle_path(), {"next": pos, "fails": fails, "gave_up": gave})
+        save_cycle(pos, fails, gave)
     except OSError as e:
         print(f"sweep: {cycle_path().name} 을 쓰지 못해 {name} 단계를 돌리지 않음: {type(e).__name__}", file=sys.stderr)
         return 1
@@ -865,7 +874,7 @@ def run_cycle_step():
         gave = {"step": name, "at": time.time()}
         print(f"sweep: {name} 단계가 연속 {fails}회 실패해 다음 단계로 넘어감", file=sys.stderr)
     try:
-        save_json(cycle_path(), {"next": (pos + 1) % len(STEPS), "fails": 0, "gave_up": gave})
+        save_cycle((pos + 1) % len(STEPS), 0, gave)
     except OSError as e:
         print(f"sweep: {cycle_path().name} 을 쓰지 못함: {type(e).__name__}", file=sys.stderr)
         return code or 1

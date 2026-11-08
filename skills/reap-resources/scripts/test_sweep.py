@@ -596,8 +596,8 @@ sweep.shadow_log().unlink()
 (STATE / "reap-actions.jsonl").unlink(missing_ok=True)
 shadow_round(T0, [("stack:gone", "stack:slow")])
 with open(STATE / "reap-hard.jsonl", "w") as f:
-    f.write(json.dumps(hard_row(T0 + 2700 * 2, "stack", "slow", "docker compose down(볼륨·이미지 유지)")) + "\n")
-assert sweep.diff(48, now=NOW + 1)["rows"][0]["state"] == "excess"  # past two 15-minute passes
+    f.write(json.dumps(hard_row(T0 + 6000, "stack", "slow", "docker compose down(볼륨·이미지 유지)")) + "\n")
+assert sweep.diff(48, now=NOW + 1)["rows"][0]["state"] == "excess"  # past the default window, two 40-minute cycles and ten minutes
 (tmp / "config.json").write_text(json.dumps({"reap-hard": {"protect_file": str(PROTECT), "interval": 2700}}))
 assert sweep.lags()["hard"] == 2 * 2700 + 600 and sweep.diff(48, now=NOW + 1)["rows"][0]["state"] == "matched"
 (tmp / "config.json").write_text(json.dumps({"reap-hard": {"protect_file": str(PROTECT)}}))
@@ -903,7 +903,7 @@ other.write_text("port 1\n")
 (tmp / "config.json").write_text(json.dumps({"reap-hard": {"idle_minutes": 45, "protect_file": str(PROTECT)},
                                              "sweep": {"idle_minutes": 10, "interval": 600, "protect_file": str(other)}}))
 assert reap_hard.config()["idle_minutes"] == 10 and sweep.interval() == 600 and guard.protect_file() == str(other)
-assert sweep.lags()["hard"] == 1800
+assert sweep.lags()["hard"] == 2 * sweep.CYCLE_S + 600  # interval 600 is under the cycle floor
 (tmp / "config.json").write_text(json.dumps({"reap-hard": {"protect_file": str(PROTECT)}, "sweep": []}))
 assert reap_hard.config()["idle_minutes"] == 30  # a `sweep` of the wrong shape is none for reap-hard's own reads
 try:
@@ -1229,6 +1229,27 @@ assert guard.old_acts("serve:dark", own_old)[0] is False, "a 45-minute-old good 
 (STATE / "sweep-last.json").write_text(json.dumps({"t": time.time() - 3 * sweep.CYCLE_S - 60}))
 assert guard.old_acts("serve:dark", own_old)[0] is True
 assert guard.SWEEP_CYCLE_S == sweep.CYCLE_S
+
+# a cycle left for longer than two cycles (the automation was off, Orca closed) starts over at patrol: shadow and real
+# would otherwise consume an old round without a fresh patrol
+CYCLE.write_text(json.dumps({"next": 2, "fails": 0, "at": time.time() - 2 * sweep.CYCLE_S - 60}))
+code, _out = run_step()
+assert steps == ["patrol"] and "처음부터" in _out, (steps, _out)
+CYCLE.write_text(json.dumps({"next": 2, "fails": 0, "at": time.time() - 600}))
+run_step()
+assert steps == ["reap-hard"], steps  # a normal gap resumes
+
+# a timestamp that is valid JSON but out of range must not stop the automation (OverflowError in math.isfinite)
+for at in (10 ** 400, -10 ** 400, 1e308, True, "x"):
+    CYCLE.write_text(json.dumps({"next": 1, "fails": 0, "gave_up": {"step": "shadow", "at": at}, "at": at}))
+    code, _out = run_step()
+    assert code == 0 and len(steps) == 1, (at, code, steps, _out)
+
+# the comparison window for the old cleaners' acts follows the cycle, not a shorter configured interval: the real round
+# starts 30 minutes after the patrol round, which a 2 * 600 + 600 window would just miss
+(tmp / "config.json").write_text(json.dumps({"reap-hard": {"protect_file": str(PROTECT), "interval": 600}}))
+assert sweep.lags()["hard"] >= 3 * sweep.STEP_PERIOD_S + 2 * sweep.STEP_PERIOD_S
+(tmp / "config.json").write_text(json.dumps({"reap-hard": {"protect_file": str(PROTECT)}}))
 
 # a missing, broken or out-of-range state starts the cycle over and says so; it never raises
 for bad in ("not json", json.dumps({"next": 9, "fails": 0}), json.dumps({"next": 1, "fails": "x"}),
