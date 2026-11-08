@@ -15,7 +15,8 @@ it waits on a human; the screen only where Orca has no verdict), a full disk (an
 free disk is under --min-free-gb), an API retry loop,
 a `/goal` card with no output for --idle-min minutes (not while it is busy: a running shell or `claude agents` busy),
 a card once seen under `/goal` that sits on an empty
-prompt without it for --goal-lost-min minutes (not when its transcript's last goal_status is met: that lead is parked), or free disk under --min-free-gb. A finding still on screen is
+prompt without it for --goal-lost-min minutes (not when its transcript's last goal_status is met, or while it waits on
+purpose: a live background `orch wait`, or a board to-do for it whose due time has not come), or free disk under --min-free-gb. A finding still on screen is
 not reported again, also across restarts (--state); once it clears, the next one is new. Each round stamps
 `last_scan_at` in --state, which `orch inbox`, `orch wait`, `orch patrol` and the dashboard read to tell a watcher
 that ended (a finding, QUIET, a killed session) from one still running. It never types into a
@@ -31,7 +32,7 @@ the same line opens PARTIAL and names what is missing ("신호 없음" for the s
 STARTED when the screen shows `/goal active` and the card has written output since the check began, ENDED
 when `/goal` was on and is off now, CLOSED when its terminal went away after it was seen, else STUCK.
 """
-import argparse, contextlib, hashlib, json, os, pathlib, re, shutil, sys, tempfile, time
+import argparse, contextlib, datetime, hashlib, json, os, pathlib, re, shutil, sys, tempfile, time
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import agent_signal, compactions, prog
@@ -170,10 +171,26 @@ GOAL_NOT_TYPED = "the /goal line was not typed"
 GOAL_VERDICT = re.compile(r"^\[[^\]]*\] (?:warning: the /goal line (?:was not typed|may have reached)|typed the /goal line|\S+ already ran /goal)")
 
 
-def setup_failure(name):
+SETUP_FRESH_S = 2 * 3600  # a failure is reported within a round or two; a log older than this is history
+# The lines close-setup prints itself; anything else above `result:` can be a fragment of a multi-line error.
+SETUP_REASON = re.compile(r"^(?:\S+\s+(?:agent \w+|left open)\b|cannot list |warning: )")
+
+
+def card_started_at(handle):
+    """When the session in this terminal began (`started_at`: written at startup and resume, never by a compaction or a
+    /clear, which rewrite `at`), or None when the record is missing or from before the field."""
+    try:
+        return float(json.loads(roles.terminal_file(handle).read_text())["started_at"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def setup_failure(name, handle=None, now=None):
     """(helper, reason, manual command or "") when a start helper's log for card `name` ends in a failure, else None. A log with no verdict
     (still running, missing, unreadable) is none: close-setup ends on `result: ok|failed`, and the /goal input's
-    newest line says whether it typed. The log is appended to, so only its last verdict counts."""
+    newest line says whether it typed. The log is appended to, so only its last verdict counts.
+    A close-setup log older than the session in `handle` started, or older than SETUP_FRESH_S, is stale: the same
+    card name is reused, and a watcher that lost its state would report last week's failure as new."""
     def last_lines(helper):
         try:
             return [l.strip() for l in (SETUP_STATE / helper / f"{name}.log").read_text(errors="replace").splitlines() if l.strip()]
@@ -181,7 +198,15 @@ def setup_failure(name):
             return []
     lines = last_lines("close-setup")
     if lines and lines[-1] == "result: failed":
-        return "close-setup", (lines[-2] if len(lines) > 1 else "see its log"), ""
+        try:
+            written = (SETUP_STATE / "close-setup" / f"{name}.log").stat().st_mtime
+        except OSError:
+            written = None
+        started = card_started_at(handle) if handle else None
+        stale = written is not None and ((now or time.time()) - written > SETUP_FRESH_S or started is not None and written < started)
+        if not stale:
+            reason = next((l for l in reversed(lines[:-1]) if SETUP_REASON.match(l)), "see its log")
+            return "close-setup", reason, ""
     # The helper's own prefix decides, never the goal text it quotes after it.
     verdicts = [l for l in last_lines("goal-input") if GOAL_VERDICT.match(l)]
     if verdicts and re.match(r"^\[[^\]]*\] warning: " + re.escape(GOAL_NOT_TYPED) + r" into ", verdicts[-1]):
@@ -191,9 +216,61 @@ def setup_failure(name):
     return None
 
 
+INBOX_WAIT = re.compile(r"\borch\s+wait\b|\borch\s+inbox\b.*--wait\b|\borchestration\s+check\b.*--wait\b")
+
+
+def session_of(handle):
+    try:
+        return json.loads(roles.terminal_file(handle).read_text())["session_id"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def parked_cards(terms, monitors, items, now):
+    """{handle: why} for each card that waits on purpose, from signals other parts of the plugin already keep:
+    a running background `orch wait` / `orchestration check --wait` in its session (fleet.fetch_monitors: the
+    transcript's task checked against the process table), or a board to-do or held item for it whose `due` has
+    not come (`who` is the card's title or name, as `orch board todo add --who` writes it). now: Unix time."""
+    out = {}
+    for t in terms:
+        h, sid = t["handle"], session_of(t["handle"])
+        for m in monitors or []:
+            same = m.get("claude_session") == sid if sid else m.get("cwd") == t.get("worktreePath")
+            if m.get("status") == "running" and same and INBOX_WAIT.search(m.get("command") or ""):
+                out[h] = "inbox wait"
+        names = {n.lower() for n in (t.get("title"), card_name(t)) if n}
+        for item in items or []:
+            try:
+                due = datetime.datetime.fromisoformat(item["due"]).timestamp()
+            except (KeyError, ValueError, TypeError):
+                continue
+            if (item.get("who") or "").lower() in names and due > now:
+                out.setdefault(h, f"due {item['due']}")
+    return out
+
+
+def fetch_parking():
+    """(background tasks, board to-dos and held items) for parked_cards; either is empty when its source cannot be read,
+    which leaves 'goal lost' reported, the safe side."""
+    monitors, items = [], []
+    try:
+        import fleet
+        monitors = fleet.fetch_monitors()
+    except (SystemExit, Exception):
+        pass
+    try:
+        import board
+        data = board.read()
+        items = (data.get("todo") or []) + (data.get("later") or [])
+    except (SystemExit, Exception):
+        pass
+    return monitors, items
+
+
 def scan(terms, seen, read, now_ms, idle_min, free_gb, min_free_gb, goal_lost_min=15, waits=None, agents=None, states=None,
-         low_disk=prog.NOT_LOOKED):
+         low_disk=prog.NOT_LOOKED, parked=None):
     """Lines for findings not in seen; seen becomes this round's findings, so a cleared one can come back.
+    parked (parked_cards): handle -> why a card with no goal waits on purpose, so it is not "goal lost".
 
     seen["goals"] lists the handles once seen under `/goal`: a `/goal` card's goal has no other record, and only
     such a card is expected to keep one. waits (handle -> Orca's agentWait, prog.agent_waits) decides whether a
@@ -214,7 +291,7 @@ def scan(terms, seen, read, now_ms, idle_min, free_gb, min_free_gb, goal_lost_mi
         waited = waits.get(h, prog.NOT_LOOKED)
         # A card that never started looks idle, so its helper logs are judged apart from the screen, and before the
         # screen read: an unreadable pane must not hide the failure or forget that it was reported.
-        failed = setup_failure(card_name(t))
+        failed = setup_failure(card_name(t), h)
         if failed:
             helper, reason, manual = failed
             skey = f"setup:{helper}:{hashlib.sha1(reason.encode()).hexdigest()[:12]}"
@@ -236,11 +313,15 @@ def scan(terms, seen, read, now_ms, idle_min, free_gb, min_free_gb, goal_lost_mi
         tail = (lines or [])[-25:]
         idle = (now_ms - (t.get("lastOutputAt") or now_ms)) / 60000
         auth = auth_line(tail) if idle >= AUTH_QUIET_MIN else None
+        goal = under_goal(t, tail)
+        # A "Goal paused" line left on screen is old once the status bar shows /goal active again. Busy does not count:
+        # a paused goal with a dev server or Monitor running is still paused.
+        if auth and auth.startswith("Goal paused") and goal:
+            auth = None
         hit = prog.judge_wait(waited, lines, low_disk=free_gb < min_free_gb if low_disk is prog.NOT_LOOKED else low_disk)
         finding = "auth" if auth else hit[0] if hit else ""
         state, basis = screen_state(tail, idle, finding)
         states[h] = (state, "unreadable" if lines is None else basis, finding)  # a wait Orca found stands without the pane
-        goal = under_goal(t, tail)
         if goal:
             goals.add(h)
         if auth:
@@ -251,7 +332,9 @@ def scan(terms, seen, read, now_ms, idle_min, free_gb, min_free_gb, goal_lost_mi
         elif goal and idle > idle_min and not busy_now(h, state, agents):
             kind, question, key = f"a /goal card silent {int(idle)} min", "", f"idle:{t.get('lastOutputAt')}"
         elif (not goal and h in goals and idle > goal_lost_min and any(l.strip() == "❯" for l in tail)
-              and not goal_met(h)):  # a met goal parked on purpose is not lost
+              and h not in (parked or {}) and not goal_met(h)):
+            # A met goal, a live inbox wait or a board to-do due later is parked on purpose (parked_cards); any other
+            # background work is not a reason to keep a lost goal quiet.
             kind, question, key = f"goal lost, idle {int(idle)} min", "", f"lost:{t.get('lastOutputAt')}"
         else:
             continue
@@ -437,7 +520,8 @@ def main(argv):
         states, memo = {}, seen.get("signals")
         free_gb = shutil.disk_usage(pathlib.Path.home()).free / 2**30
         lines = scan(terms, seen, cache.reader(terms), time.time() * 1000, a.idle_min, free_gb, a.min_free_gb,
-                     a.goal_lost_min, prog.agent_waits(terminals=everything), agents=reads, states=states)
+                     a.goal_lost_min, prog.agent_waits(terminals=everything), agents=reads, states=states,
+                     parked=parked_cards(terms, *fetch_parking(), time.time()))
         record(seen, memo, terms, reads, states, problem, raw, warned, a.self_handle)
         seen.update(last_scan_at=time.time(), interval=a.interval)
         save(state, seen)

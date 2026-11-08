@@ -943,14 +943,14 @@ card.time.sleep = lambda s: SLEPT.append(s)
 REAL_TYPE = card.type_when_idle
 
 
-def run_helper(answers, timeout_s=3600, worktree=None):
+def run_helper(answers, timeout_s=3600, worktree=None, handle="term_w"):
     """goal_after_idle with type_when_idle answering from `answers` in turn: None (typed) or a reason."""
     queue = list(answers)
     SENDS.clear()
     card.type_when_idle = lambda handle, line, deadline=None: SENDS.append((handle, line)) or queue.pop(0)
     err = io.StringIO()
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
-        rc = card.goal_after_idle("term_w", LINE, timeout_s, worktree)
+        rc = card.goal_after_idle(handle, LINE, timeout_s, worktree)
     return rc, err.getvalue()
 
 
@@ -1067,6 +1067,24 @@ try:
 finally:
     sync.HOMES = real_homes
     os.environ["CLAUDE_PROJECTS_DIR"] = str(PROJECTS)
+# A structured session's handle is no terminal: the /goal line goes to the worktree's terminal once Orca lists one, and a
+# session that never gets one is reported as such (the manual command names the terminal list, not the dead handle).
+REAL_AGENT_TERMINAL, REAL_GOAL_STATE, SID = sync.agent_terminal, card.goal_state, "structured-agent-session-claude_x"
+card.goal_state = lambda worktree, line: "other"  # the transcript is not under test
+lookups = iter([(None, "no Claude terminal yet"), (None, "no Claude terminal yet"), ("term_real", "")])
+sync.agent_terminal = lambda handle, worktree: next(lookups)
+SLEPT.clear()
+rc, err = run_helper([None], worktree="/w/card", handle=SID)
+assert rc == 0 and SENDS == [("term_real", LINE)] and SLEPT == [card.GOAL_POLL_S] * 2, (rc, SENDS, SLEPT, err)
+sync.agent_terminal = lambda handle, worktree: (None, "a structured session with no Claude terminal in its worktree")
+ticks = iter([0, 1, 100])
+card.time.monotonic = lambda: next(ticks)
+try:
+    rc, err = run_helper([None], timeout_s=50, worktree="/w/card", handle=SID)
+finally:
+    card.time.monotonic = real_monotonic
+    sync.agent_terminal, card.goal_state = REAL_AGENT_TERMINAL, REAL_GOAL_STATE
+assert rc == 1 and SENDS == [] and "no Claude terminal in its worktree" in err and "orca terminal list --worktree path:/w/card" in err, (rc, SENDS, err)
 # The KIND row's kind is the whole word before the dash.
 for bad in ("KIND: design-extra — reason", "KIND: edit-typo — x", "KIND: edit -x"):
     try:
@@ -1271,5 +1289,15 @@ rc, out, err, calls = go(brief(WORKER + "TASKS: add pagination and verify it\nGA
 assert rc == 0 and model_of(calls) == "sonnet", (rc, err)
 rc, out, err, calls = go(brief(LEAD, "nl.md"), "--repo", "r", "--no-parent", "--name", "backlog-lead")
 assert rc == 0 and model_of(calls) == "opus", (rc, err)
+
+# handle_of: a structured session's handle is no terminal (`orca terminal read` refuses it), so a terminal handle wins.
+sys.path.insert(0, str(HERE))
+import card as card_module  # noqa: E402
+structured = {"launch": {"outcome": {"handle": "structured-agent-session-claude_x"}}}
+with_terminal = {**structured, "effects": [{"kind": "terminal", "role": "agent", "id": "term_a"}]}
+assert card_module.handle_of(with_terminal) == "term_a", card_module.handle_of(with_terminal)
+assert card_module.handle_of({**structured, "worker": {"terminal": "term_b"}}) == "term_b"
+assert card_module.handle_of(structured) == "structured-agent-session-claude_x", "no terminal named: the structured handle stays"
+assert card_module.handle_of({"launch": {"outcome": {"handle": "term_c"}}, "effects": [{"kind": "terminal", "role": "agent", "id": "term_a"}]}) == "term_c"
 
 print("ok")

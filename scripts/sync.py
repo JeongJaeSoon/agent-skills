@@ -443,13 +443,24 @@ def reloaded(before, after, command):
             and any(l.strip().startswith("⎿") and "Reloaded" in l for l in lines[i + 1:]))
 
 
+def error_text(stdout, stderr, limit=300):
+    """One line for a failed orca call: `code: message` from its JSON error when it prints one, else the text with its
+    newlines folded. A line cut mid-JSON, or one that spans lines, leaves a fragment in the logs that read it."""
+    try:
+        err = json.loads(stdout)["error"]
+        text = f"{err['code']}: {err['message']}" if isinstance(err, dict) and err.get("code") else json.dumps(err)
+    except (ValueError, KeyError, TypeError):
+        text = stderr.strip() or stdout.strip()
+    return " ".join(text.split())[:limit]
+
+
 def orca(*args):
     try:
         p = subprocess.run([ORCA, *args, "--json"], capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.TimeoutExpired) as e:
         raise Stop(f"orca {' '.join(args[:2])} failed: {e}")
     if p.returncode:
-        raise Stop(f"orca {' '.join(args[:2])} failed: {(p.stderr or p.stdout).strip()[:200]}")
+        raise Stop(f"orca {' '.join(args[:2])} failed: {error_text(p.stdout, p.stderr)}")
     try:
         return json.loads(p.stdout)["result"]
     except (ValueError, KeyError) as e:
@@ -811,17 +822,40 @@ def start_state(handle):
     return "unconfirmed", reason or "idle at an empty prompt"
 
 
-def watch_start(handle, grace_s):
-    """Poll the agent's screen until it started or grace_s passed. Returns (state, detail)."""
+def watch_start(handle, grace_s, worktree=None):
+    """Poll the agent's screen until it started or grace_s passed. Returns (state, detail). With `worktree`, a
+    structured-session handle is looked up again on each poll (agent_terminal) until it names a terminal."""
     start, state = time.monotonic(), ("unconfirmed", "not read")
     while True:
         try:
-            state = start_state(handle)
+            target, why = agent_terminal(handle, worktree) if worktree else (handle, "")
+            state = start_state(target) if target else ("unconfirmed", why)
         except (Stop, KeyError, TypeError) as e:
             state = ("unconfirmed", f"screen unreadable: {e}")
         if state[0] != "unconfirmed" or time.monotonic() - start >= grace_s:
             return state
         time.sleep(SETUP_POLL_S)
+
+
+def agent_terminal(handle, worktree):
+    """(the terminal to read for a card's agent, why there is none). A start that launched a structured session names
+    `structured-agent-session-…`, which `orca terminal read` refuses (terminal_handle_stale) however alive the agent is;
+    the worktree's one connected Claude terminal stands for it. Any other handle is returned as given. Orca lists the
+    terminal with agentIdentity null for a while after the start, and a chat-surface session may have none at all, so
+    "no terminal" is an answer to ask again, not a verdict."""
+    if not handle.startswith("structured-"):
+        return handle, ""
+    try:
+        terms = orca("terminal", "list", "--worktree", f"path:{worktree}")["terminals"]
+        claude = [t["handle"] for t in terms if t.get("agentIdentity") == "claude" and t.get("connected", True) and t.get("handle")]
+    except (Stop, KeyError, TypeError) as e:
+        return None, f"cannot list the worktree's terminals: {e}"
+    if len(claude) == 1:
+        return claude[0], ""
+    if claude:
+        return None, f"{len(claude)} Claude terminals in the worktree; cannot tell which one is the structured session"
+    return None, ("a structured session with no Claude terminal in its worktree (a chat-surface session has no screen to read, "
+                  "or Orca has not named the terminal's agent yet)")
 
 
 def close_setup(worktree, timeout_s=1800, grace_s=120, agent=None):
@@ -834,7 +868,7 @@ def close_setup(worktree, timeout_s=1800, grace_s=120, agent=None):
     start = time.monotonic()
     rc = 0
     if agent:
-        state, detail = watch_start(agent, grace_s)
+        state, detail = watch_start(agent, grace_s, worktree)
         print(f"{agent}  agent {state}: {detail}")
         if state != "started":
             rc = 1

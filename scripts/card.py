@@ -699,6 +699,18 @@ def goal_after_idle(handle, line, timeout_s=GOAL_IDLE_S, worktree=None):
     manual = manual_goal_command(handle, line)
     deadline = time.monotonic() + timeout_s
     while True:
+        if handle.startswith("structured-") and worktree:
+            # Not a terminal: the worktree's Claude terminal stands for it once Orca lists one, which can be after the start.
+            named, why = sync.agent_terminal(handle, worktree)
+            if not named:
+                if time.monotonic() >= deadline:
+                    print(f"[{ME}] warning: the /goal line was not typed into {handle} ({why}; waited up to {timeout_s}s). "
+                          f"Find the card's terminal with `orca terminal list --worktree path:{worktree}` and type it there.",
+                          file=sys.stderr)
+                    return 1
+                time.sleep(GOAL_POLL_S)
+                continue
+            handle, manual = named, manual_goal_command(named, line)
         if time.monotonic() >= deadline:
             print(f"[{ME}] warning: the /goal line was not typed into {handle} (waited up to {timeout_s}s). "
                   f"Once the session is idle, run: {manual}", file=sys.stderr)
@@ -860,11 +872,15 @@ def worktree_path(res):
 
 
 def handle_of(res):
-    """The new agent's handle: launch.outcome.handle (a chat or a terminal), else the older worker terminal fields."""
-    return ((((res.get("launch") or {}).get("outcome") or {}).get("handle")) or orca_settings.worker_terminal(res)
+    """The new agent's handle: launch.outcome.handle (a chat or a terminal), else the older worker terminal fields.
+    A `structured-agent-session-…` handle is no terminal and `orca terminal read` refuses it, so a terminal handle
+    from any other field wins, and the structured one is only the last resort."""
+    launched = ((res.get("launch") or {}).get("outcome") or {}).get("handle")
+    structured = launched if isinstance(launched, str) and launched.startswith("structured-") else None
+    return ((None if structured else launched) or orca_settings.worker_terminal(res)
             or orca_settings.worker_terminal(res.get("worker")) or ((res.get("dispatch") or {}).get("assigneeHandle"))
             or next((e.get("id") for e in res.get("effects") or [] if isinstance(e, dict)
-                     and e.get("kind") == "terminal" and e.get("role") == "agent"), None))
+                     and e.get("kind") == "terminal" and e.get("role") == "agent"), None) or structured)
 
 
 def parse_args(rest):
