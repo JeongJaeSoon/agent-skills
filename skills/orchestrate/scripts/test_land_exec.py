@@ -618,6 +618,44 @@ class LandExec(Fixture):
         self.assertEqual(code, 1, out)
         self.assertIn("502", out)
 
+    def test_land_check_holds_a_pr_with_no_test_results_comment_as_the_executor_does(self):
+        """#552: land-check said READY, then every land request was refused for the missing comment."""
+        self.verdict()
+        self.edit_pr(comments=[])
+        code, out = self.land_check()
+        self.assertEqual(code, 1, out)
+        self.assertNotIn("READY", out)
+        row = self.request()
+        self.round()
+        reason = self.settled(row, "refused", 3)["reason"]
+        self.assertIn(reason.split(":")[0], out)  # the executor's reason, word for word
+        # With the comment both pass this check.
+        self.edit_pr(comments=[RESULTS])
+        code, out = self.land_check()
+        self.assertNotIn("test-results", out)
+        # Executor off: the direct path never required the comment, so land-check does not either.
+        self.edit_pr(comments=[])
+        config(enabled=False)
+        code, out = self.land_check()
+        self.assertNotIn("test-results", out)
+
+    def test_land_check_and_the_executor_agree_on_screen_and_failed_run_evidence(self):
+        self.verdict()
+        self.edit_pr(files=["apps/web/src/members.tsx"], comments=[RESULTS])
+        code, out = self.land_check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("renders no image", out)
+        row = self.request()
+        self.round()
+        self.settled(row, "refused", 3, "renders no image")
+        self.edit_pr(files=["src/x.py"])
+        st = self.gh()
+        st["branch_runs"] = {f"b{self.n}": [{"databaseId": 555, "conclusion": "failure", "name": "CI", "headSha": f"h{self.n}"}]}
+        self.write(st)
+        code, out = self.land_check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("555 (CI failure)", out)
+
     def test_land_check_asks_github_only_when_the_executor_is_on(self):
         """executor_for asks GitHub for the repo's name; a repo the executor is off for must not pay (or fail) for it."""
         config(enabled=False)
