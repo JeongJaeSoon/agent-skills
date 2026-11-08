@@ -525,6 +525,7 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except Exception as e:
+    except Exception as e:  # a stdin that is not JSON
         config.log_error("tracker_gate", e)
+        log("", "", "pass", "pass-error")
     sys.exit(0)

@@ -10,7 +10,7 @@ process of its own. artifact_archive stays apart too: it leaves a recovery marke
 `hooks.dispatch: false` in ~/.claude/agent-skills.json runs every module as its own process instead (the old shape)
 and merges the same way; a session that loaded this file before a rollback keeps working through it.
 """
-import contextlib, importlib, io, json, os, pathlib, re, signal, subprocess, sys, threading
+import contextlib, importlib, io, json, os, pathlib, re, signal, subprocess, sys, threading, time
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -85,12 +85,6 @@ def note(why):
 
 def call(module, event, timeout):
     """module.run(event) under a timeout, or Skipped. A module that raises or exits yields None, as its hook did."""
-    try:
-        mod = importlib.import_module(module)
-        run = mod.run
-    except Exception as e:
-        config.log_error(module, e)
-        raise Skipped(note(f"{module} could not be loaded ({type(e).__name__})"))
     armed = [True]
 
     def alarm(*_):
@@ -99,24 +93,29 @@ def call(module, event, timeout):
 
     old = signal.signal(signal.SIGALRM, alarm)
     signal.setitimer(signal.ITIMER_REAL, timeout)
-    buf, out = io.StringIO(), None
+    buf, out, loading = io.StringIO(), None, True
     try:
-        with contextlib.redirect_stdout(buf):
+        with contextlib.redirect_stdout(buf):  # the import is inside the limit, the redirect and the isolation
+            run = importlib.import_module(module).run
+            loading = False
             out = run(event)
         armed[0] = False
     except _Timeout:
         raise Skipped(note(f"{module} ran past its {timeout:g}s limit"))
-    except SystemExit:
-        out = None
-    except Exception as e:
-        config.log_error(module, e)
+    except (Exception, SystemExit) as e:
+        if loading:
+            config.log_error(module, e if isinstance(e, Exception) else RuntimeError("exited while loading"))
+            raise Skipped(note(f"{module} could not be loaded ({type(e).__name__})"))
+        if isinstance(e, Exception):
+            config.log_error(module, e)
         out = None
     finally:
         armed[0] = False
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, old)
-    if buf.getvalue():
+    if buf.getvalue():  # a module that wrote to stdout is not trusted for its return value either
         config.log_error(module, RuntimeError("wrote to stdout"))
+        return None
     if out is not None and not isinstance(out, dict):
         config.log_error(module, TypeError("run() did not return a dict"))
         return None
@@ -130,13 +129,18 @@ def add(items, text):
 
 def fit(parts):
     """The parts joined by newlines; whole trailing parts go (and are counted) when the text passes CAP."""
+    if len("\n".join(parts)) <= CAP:
+        return "\n".join(parts)
+    config.log_error("dispatch", RuntimeError("merged text passed the cap"))
     kept = list(parts)
     while len(kept) > 1 and len("\n".join(kept)) + 40 > CAP:
         kept.pop()
-    if len(kept) == len(parts):
-        return "\n".join(parts)
-    config.log_error("dispatch", RuntimeError("merged text passed the cap"))
-    return "\n".join(kept + [f"({len(parts) - len(kept)} more omitted)"])
+    if len(kept[0]) + 60 > CAP:  # one entry alone is over: cut it
+        cut = len(kept[0]) - (CAP - 60)
+        kept[0] = kept[0][:CAP - 60] + f"... ({cut} characters cut)"
+    if len(kept) < len(parts):
+        kept.append(f"({len(parts) - len(kept)} more omitted)")
+    return "\n".join(kept)
 
 
 def merge(name, results):
@@ -191,10 +195,16 @@ def legacy(event, chosen):
     for module, timeout in chosen:
         p = subprocess.Popen([sys.executable, str(HERE / f"{module}.py")], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                              stderr=subprocess.DEVNULL, text=True)
-        procs.append((module, timeout, p))
-    for module, timeout, p in procs:
+        try:  # every child gets its input now: some start a limit of their own the moment they run
+            p.stdin.write(data)
+            p.stdin.close()
+        except OSError:
+            pass
+        p.stdin = None  # closed here, so communicate() below only reads
+        procs.append((module, time.monotonic() + timeout, timeout, p))
+    for module, deadline, timeout, p in procs:
         try:
-            stdout, _ = p.communicate(data, timeout=timeout)
+            stdout, _ = p.communicate(timeout=max(0.01, deadline - time.monotonic()))
         except subprocess.TimeoutExpired:
             p.kill()
             p.communicate()

@@ -73,6 +73,12 @@ assert m["hookSpecificOutput"]["permissionDecisionReason"] == "keep-me"
 ctx = m["hookSpecificOutput"]["additionalContext"]
 assert big in ctx and "y" * 6000 not in ctx and len(ctx) < 10000 and "1" in ctx.splitlines()[-1], ctx[-80:]
 
+# one entry longer than the cap is cut too, with the cut counted
+for parts in (["x" * 12000], ["x" * 12000, "y"]):
+    fitted = dispatch.fit(parts)
+    assert len(fitted) < 10000 and ("cut" in fitted or "omitted" in fitted), (len(fitted), fitted[-60:])
+assert dispatch.fit(["short", "text"]) == "short\ntext"
+
 # ---- matchers: a plain name list is exact, anything else is a regex search (Claude Code's matcher rules)
 assert dispatch.matches(None, "Anything")
 assert dispatch.matches("Bash|Monitor", "Bash") and not dispatch.matches("Bash|Monitor", "BashOutput")
@@ -186,10 +192,15 @@ def entries(*names, timeout=2):
     return [(n, None, timeout) for n in names]
 
 
-out = dispatch.dispatch(EV, entries("fake_raise", "fake_exit", "fake_print", "fake_ok", "fake_norun", "fake_broken"))
-assert out["systemMessage"].splitlines()[0] == "after-print" and "ok:Bash" in out["systemMessage"], out
-assert "fake_broken" in out["systemMessage"] and "fake_norun" in out["systemMessage"], out  # skipped modules are named
-assert "stray text" not in json.dumps(out)
+fake("fake_importexit", "import sys\nsys.exit(0)\ndef run(event):\n    return {'systemMessage': 'never'}\n")
+fake("fake_importprint", "print('import noise')\ndef run(event):\n    return {'systemMessage': 'never'}\n")
+out = dispatch.dispatch(EV, entries("fake_raise", "fake_exit", "fake_print", "fake_ok", "fake_norun", "fake_broken",
+                                    "fake_importexit", "fake_importprint"))
+assert out["systemMessage"].splitlines()[0] == "ok:Bash", out
+for gone in ("fake_broken", "fake_norun", "fake_importexit"):  # a module that cannot load is named
+    assert gone in out["systemMessage"], (gone, out)
+assert "stray text" not in json.dumps(out) and "after-print" not in json.dumps(out), out  # a module that printed loses its output
+assert "never" not in json.dumps(out) and "import noise" not in json.dumps(out), out
 log = (TMP / "state" / "guard-errors.jsonl").read_text()
 assert "fake_raise" in log and "fake_print" in log, log
 
@@ -205,6 +216,27 @@ assert "fake_slow" in out["systemMessage"] and "ok:Bash" in out["systemMessage"]
 out = dispatch.dispatch(EV, entries("fake_deny", "fake_ok"))
 assert out["hookSpecificOutput"]["permissionDecision"] == "deny" and "ok:Bash" in out["systemMessage"], out
 assert (TMP / "state" / "deny-ran").exists()
+
+# ---- legacy mode feeds every child its input at once: a child with a short limit of its own must not wait behind a slow one
+fake("fake_slowchild", """
+    import json, sys, time
+    sys.stdin.read()
+    time.sleep(0.6)
+    print(json.dumps({"systemMessage": "slow"}))
+""")
+fake("fake_alarmchild", """
+    import json, signal, sys
+    signal.setitimer(signal.ITIMER_REAL, 0.3)  # like subagent_log: a limit of its own, counted from its start
+    sys.stdin.read()
+    print(json.dumps({"decision": "block", "reason": "quick"}))
+""")
+real_here = dispatch.HERE
+dispatch.HERE = FAKES
+try:
+    got = dict(dispatch.legacy({"x": 1}, [("fake_slowchild", 5), ("fake_alarmchild", 5)]))
+finally:
+    dispatch.HERE = real_here
+assert got["fake_slowchild"] == {"systemMessage": "slow"} and got["fake_alarmchild"] == {"decision": "block", "reason": "quick"}, got
 
 # ---- a hung module (signals blocked) still lets the finished deny out before the process ends
 fake("fake_hang", """
