@@ -58,6 +58,35 @@ except ImportError:  # an install without the repo's scripts/
     AGENT_PANEL, BACKGROUND = FALLBACK_AGENT_PANEL, FALLBACK_BACKGROUND
 
 
+SCREEN_TTL_S = 600  # a cached screen is read again after this long even when lastOutputAt has not moved
+
+
+class ScreenCache:
+    """Screens by handle, kept while the terminal's lastOutputAt is unchanged: a terminal that wrote nothing shows the
+    same rows. Only the read is cached; scan judges time, agentWait, auth, idle and goal-lost from the lines every round.
+    A missing lastOutputAt, a different one, an entry older than ttl or a failed read means a read."""
+
+    def __init__(self, fetch=None, ttl=SCREEN_TTL_S, clock=time.time):
+        # The whole screen, not `--limit 25`: prog.without_diffs needs a diff header that may sit above the last 25 rows,
+        # and a cut screen turns the bottom of a long diff into a false select menu.
+        self.fetch, self.ttl, self.clock, self.rows = fetch or (lambda h: prog.read_screen(h)), ttl, clock, {}
+
+    def reader(self, terms):
+        stamps = {t["handle"]: t.get("lastOutputAt") for t in terms}
+        self.rows = {h: r for h, r in self.rows.items() if h in stamps}
+
+        def read(handle):
+            stamp, row = stamps.get(handle), self.rows.get(handle)
+            if stamp is not None and row and row[0] == stamp and self.clock() - row[1] < self.ttl:
+                return row[2]
+            self.rows.pop(handle, None)
+            lines = self.fetch(handle)
+            if stamp is not None:
+                self.rows[handle] = (stamp, self.clock(), lines)
+            return lines
+        return read
+
+
 def agent_terminals(listing, self_handle, only=()):
     """Agent terminals but this session's own; with `only`, just those handles (a lead's own cards)."""
     return [t for t in listing if t.get("agentIdentity") and t.get("connected", True) and t.get("handle") != self_handle
@@ -393,21 +422,22 @@ def main(argv):
     ap.add_argument("--card", help="the agentTerminalHandle of a card just created: check its start only")
     ap.add_argument("--within", type=int, default=240, help="--card: seconds before judging the start")
     a = ap.parse_args(argv)
-    listing = lambda: agent_terminals(prog.orca_json("terminal", "list").get("terminals", []), a.self_handle, a.handle)
+    listed = lambda: prog.orca_json("terminal", "list").get("terminals", [])
     if a.card:
-        print("\n".join(check_start(a.card, prog.read_screen, listing, a.within, min(a.interval, 30),
-                               min_free_gb=a.min_free_gb)), flush=True)
+        print("\n".join(check_start(a.card, prog.read_screen, lambda: agent_terminals(listed(), a.self_handle, a.handle),
+                                    a.within, min(a.interval, 30), min_free_gb=a.min_free_gb)), flush=True)
         return
     state = a.state or STATE_DIR / f"{a.self_handle or 'default'}.json"
-    seen, deadline = load(state), time.time() + a.timeout_ms / 1000
+    seen, deadline, cache = load(state), time.time() + a.timeout_ms / 1000, ScreenCache()
     while True:
-        terms = listing()
+        everything = listed()  # the round's one `terminal list`: the waits below reuse it
+        terms = agent_terminals(everything, a.self_handle, a.handle)
         rows, problem, raw = agent_signal.read()
         reads, warned = agent_signal.readings(terms, rows, problem)
         states, memo = {}, seen.get("signals")
         free_gb = shutil.disk_usage(pathlib.Path.home()).free / 2**30
-        lines = scan(terms, seen, prog.read_screen, time.time() * 1000, a.idle_min, free_gb, a.min_free_gb,
-                     a.goal_lost_min, prog.agent_waits(), agents=reads, states=states)
+        lines = scan(terms, seen, cache.reader(terms), time.time() * 1000, a.idle_min, free_gb, a.min_free_gb,
+                     a.goal_lost_min, prog.agent_waits(terminals=everything), agents=reads, states=states)
         record(seen, memo, terms, reads, states, problem, raw, warned, a.self_handle)
         seen.update(last_scan_at=time.time(), interval=a.interval)
         save(state, seen)

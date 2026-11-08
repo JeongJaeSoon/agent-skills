@@ -232,6 +232,7 @@ def read_or_gone(h):
         raise SystemExit("terminal gone")
     return screens[h]
 prog.orca_json = lambda *a: {"terminals": listing}
+real_read_screen = prog.read_screen
 prog.read_screen = read_or_gone
 with tempfile.TemporaryDirectory() as d:
     state = pathlib.Path(d) / "s.json"
@@ -433,5 +434,101 @@ assert [l for l in card_watch.scan(two, {}, flaky, NOW, 30, 100.0, 15) if l.star
 seen = {}
 card_watch.scan(terms, seen, flaky, NOW, 30, 100.0, 15)
 assert card_watch.scan(two, seen, flaky, NOW, 30, 100.0, 15) == [], "a second terminal on a reported card is not new"
+
+# A round asks Orca for the terminal list once, and reads each screen whole: prog.without_diffs needs a diff header that
+# can sit above the last 25 rows, so a long diff ending in "Enter to select" must not turn into a select menu.
+long_diff = ["⏺ Update(a.py)"] + [f"  {i} + code {i}" for i in range(1, 31)] + ["  31 + # Enter to select · Esc to cancel", "❯ "]
+diff_card = card_watch.agent_terminals([term("h3", "/w/card-c", last=NOW - 60000)], "me")  # card-c has no setup failure
+assert card_watch.scan(diff_card, {}, lambda h: long_diff, NOW, 30, 100.0, 15) == [], "the whole screen: the diff is not a menu"
+assert card_watch.scan(diff_card, {}, lambda h: long_diff[-25:], NOW, 30, 100.0, 15), \
+    "the same screen cut to 25 rows reads as a menu, which is why card_watch does not pass --limit"
+real_orca_json, asked = prog.orca_json, []  # real_read_screen: prog's own, saved before the stubs above
+def answer(*a):
+    asked.append(a)
+    return {"worktrees": [], "terminals": listing} if a[:2] != ("terminal", "read") else {"terminal": {"tail": long_diff}}
+prog.orca_json, prog.read_screen = answer, real_read_screen
+with tempfile.TemporaryDirectory() as d, contextlib.redirect_stdout(io.StringIO()) as shown:
+    card_watch.main(["--self", "me", "--min-free-gb", "0", "--state", str(pathlib.Path(d) / "calls.json"), "--once"])
+assert [a for a in asked if a[:2] == ("terminal", "list")] == [("terminal", "list")], f"one terminal list per round: {asked}"
+reads = [a for a in asked if a[:2] == ("terminal", "read")]
+assert reads and all("--screen" in a and "--limit" not in a for a in reads), f"card_watch reads the whole screen: {reads}"
+assert "select menu" not in shown.getvalue(), shown.getvalue()
+prog.orca_json = real_orca_json
+
+# agent_waits takes a terminal list the caller already has, so it asks for none.
+asked.clear()
+prog.orca_json = lambda *a: (asked.append(a), {"worktrees": [{"agents": [{"paneKey": "t:l", "agentWait": {"prompt": "?"}}]}]})[1]
+got = prog.agent_waits(terminals=[{"handle": "h1", "tabId": "t", "leafId": "l"}, {"handle": "h2", "tabId": "t", "leafId": "x"}])
+assert got == {"h1": {"prompt": "?"}} and [a[:2] for a in asked] == [("worktree", "ps")], (got, asked)
+prog.orca_json = real_orca_json
+
+# The screen is cached while lastOutputAt stays the same; every verdict is still made each round from the cached lines.
+class Tick:
+    now = 1000.0
+    def __call__(self): return self.now
+fetched, tick = [], Tick()
+shown = {"h3": goal, "h4": goal}
+def fetch(h):
+    fetched.append(h)
+    return shown[h]
+cache = card_watch.ScreenCache(fetch, clock=tick)
+def round_at(minutes, terms_now, waits=None):
+    return card_watch.scan(terms_now, seen_cache, cache.reader(terms_now), NOW + minutes * 60000, 30, 100.0, 15, waits=waits)
+quiet_goal = card_watch.agent_terminals([term("h4", "/w/card-d", last=NOW - 5 * 60000)], "me")
+seen_cache = {}
+assert round_at(0, quiet_goal) == [] and fetched == ["h4"]
+tick.now += 180
+assert round_at(10, quiet_goal) == [] and fetched == ["h4"], "the same lastOutputAt: no second read"
+tick.now += 180
+silent = round_at(30, quiet_goal)
+assert fetched == ["h4"] and silent and silent[0].startswith("STUCK card-d (a /goal card silent 35 min)"), \
+    "the idle clock moves every round although the screen is cached"
+tick.now += 180
+parked = card_watch.agent_terminals([term("h4", "/w/card-d", last=NOW - 5 * 60000)], "me")
+waited = round_at(31, parked, waits={"h4": {"evidence": "prompt-text", "prompt": "Which base?"}})
+assert fetched == ["h4"] and waited[0].startswith("STUCK card-d (waiting on a prompt (Orca agentWait, prompt-text))"), \
+    "Orca's agentWait is read fresh each round, not cached with the screen"
+
+# The auth rule needs two quiet minutes: a cached screen crosses that line between rounds without a new read.
+shown["h4"] = ["Please run /login · API Error: 403 Forbidden", "❯ "]
+cache, seen_cache = card_watch.ScreenCache(fetch, clock=tick), {}
+fetched.clear()
+fresh = card_watch.agent_terminals([term("h4", "/w/card-d", last=NOW - 30000)], "me")
+assert round_at(0, fresh) == [] and fetched == ["h4"], "30 s of quiet: not judged yet"
+auth = round_at(3, fresh)
+assert fetched == ["h4"] and auth and auth[0].startswith("STUCK card-d (auth)"), "3 min of quiet on the cached screen: auth"
+
+# What forces a read: a newer lastOutputAt, a missing field, another handle, an expired entry, a failed read.
+def reads_for(listing_now, wait=0):
+    tick.now += wait
+    before = len(fetched)
+    reader = cache.reader(card_watch.agent_terminals(listing_now, "me"))
+    for t in listing_now:
+        reader(t["handle"])
+    return len(fetched) - before
+shown.update(h1=idle, h2=idle)
+cache = card_watch.ScreenCache(fetch, clock=tick)
+fetched.clear()
+a1, a2 = term("h1", "/w/card-a", last=NOW), term("h2", "/w/card-b", last=NOW)
+assert reads_for([a1, a2]) == 2 and reads_for([a1, a2], 180) == 0, "unchanged: both cached"
+assert reads_for([term("h1", "/w/card-a", last=NOW + 1), a2], 180) == 1, "lastOutputAt moved: that card is read again"
+assert reads_for([term("h1", "/w/card-a", last=NOW + 1), a2], 180) == 0
+assert reads_for([term("h1", "/w/card-a", last=None), a2]) == 1, "no lastOutputAt: nothing to compare, read"
+assert reads_for([term("h1", "/w/card-a", last=None), a2]) == 1, "and read every round while it stays missing"
+assert reads_for([a1, term("h2", "/w/card-b", last=NOW)], card_watch.SCREEN_TTL_S) == 2, "expired: read again"
+assert reads_for([a1, a2]) == 0
+assert reads_for([a2]) == 0 and reads_for([a1, a2]) == 1, "a handle that left the list is forgotten"
+def failing(h):
+    fetched.append(h)
+    raise SystemExit("gone")
+cache = card_watch.ScreenCache(failing, clock=tick)
+fetched.clear()
+for _ in range(2):
+    try:
+        cache.reader([a1])("h1")
+    except SystemExit:
+        pass
+assert fetched == ["h1", "h1"], "a failed read is never cached"
 print("ok")
+
 
